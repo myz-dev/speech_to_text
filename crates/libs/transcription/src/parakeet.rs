@@ -38,11 +38,14 @@ const DECODER_FILE: &str = "decoder_joint-model.int8.onnx";
 const VOCABULARY_FILE: &str = "vocab.txt";
 
 /// The decoder remembers what it has written so far in an LSTM with 2 layers of 640
-/// numbers; the graph takes and returns that memory as two `[2, 1, 640]` tensors.
-const DECODER_STATE_LEN: usize = 2 * 640;
+/// numbers; the graph takes and returns that memory as two tensors of this shape
+/// (layers, batch, numbers).
+const DECODER_STATE_SHAPE: [usize; 3] = [2, 1, 640];
+const DECODER_STATE_LEN: usize = DECODER_STATE_SHAPE[0] * DECODER_STATE_SHAPE[2];
 
 /// Most tokens written for one encoder frame before moving on. The model can keep
-/// predicting "stay on this frame"; this bounds that loop.
+/// predicting "stay on this frame"; this bounds that loop. onnx-asr reads it from
+/// `config.json` with the same default; the shipped `config.json` does not set it.
 const MAX_TOKENS_PER_FRAME: usize = 10;
 
 /// The process's ONNX Runtime environment, shared by all sessions. ort allows only one
@@ -270,9 +273,9 @@ impl ParakeetModel {
                 .map_err(TranscribeError::Inference)?,
             "target_length" => TensorRef::from_array_view(([1], target_length.as_slice()))
                 .map_err(TranscribeError::Inference)?,
-            "input_states_1" => TensorRef::from_array_view(([2, 1, 640], state.first.as_slice()))
+            "input_states_1" => TensorRef::from_array_view((DECODER_STATE_SHAPE, state.first.as_slice()))
                 .map_err(TranscribeError::Inference)?,
-            "input_states_2" => TensorRef::from_array_view(([2, 1, 640], state.second.as_slice()))
+            "input_states_2" => TensorRef::from_array_view((DECODER_STATE_SHAPE, state.second.as_slice()))
                 .map_err(TranscribeError::Inference)?,
         ];
         let outputs = self
