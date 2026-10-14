@@ -3,8 +3,9 @@
 //! Transcription is deterministic for a given input (greedy decoding, fixed seeds), so exact
 //! assertions are stable on one machine; macOS voice or whisper.cpp updates can change them.
 
+mod common;
+
 use std::path::{Path, PathBuf};
-use std::process::Command;
 
 use transcription::Device;
 use transcription::whisper::{TranscribeError, WhisperModel};
@@ -12,9 +13,7 @@ use transcription::whisper::{TranscribeError, WhisperModel};
 const MODEL_FILE: &str = "ggml-large-v3-turbo.bin";
 
 fn model_path() -> PathBuf {
-    Path::new(env!("CARGO_MANIFEST_DIR"))
-        .join("../../../models")
-        .join(MODEL_FILE)
+    common::models_dir().join(MODEL_FILE)
 }
 
 fn load_model(device: Device) -> Option<WhisperModel> {
@@ -26,43 +25,19 @@ fn load_model(device: Device) -> Option<WhisperModel> {
     Some(WhisperModel::load(&path, device).unwrap())
 }
 
-/// Speaks `text` with a macOS voice and returns 16 kHz mono samples.
-fn speak(voice: &str, text: &str) -> Vec<f32> {
-    let dir = tempfile::tempdir().unwrap();
-    let path = dir.path().join("speech.wav");
-    let status = Command::new("say")
-        .args(["-v", voice, "--data-format=LEI16@16000", "-o"])
-        .arg(&path)
-        .arg(text)
-        .status()
-        .unwrap();
-    assert!(status.success(), "say failed for voice {voice}");
-    recording::load_wav(&path).unwrap()
-}
-
-/// Lowercase words without punctuation, for robust comparison.
-fn words(text: &str) -> Vec<String> {
-    text.split_whitespace()
-        .map(|w| {
-            w.trim_matches(|c: char| !c.is_alphanumeric())
-                .to_lowercase()
-        })
-        .collect()
-}
-
 #[test]
 fn transcribes_english_and_detects_language() {
     let Some(model) = load_model(Device::Gpu) else {
         return;
     };
-    let samples = speak("Daniel", "The quick brown fox jumps over the lazy dog.");
+    let samples = common::speak("Daniel", "The quick brown fox jumps over the lazy dog.");
 
     let transcript = model.transcribe(&samples, None).unwrap();
 
     assert_eq!(transcript.language, "en");
     assert_eq!(
-        words(&transcript.text),
-        words("The quick brown fox jumps over the lazy dog.")
+        common::words(&transcript.text),
+        common::words("The quick brown fox jumps over the lazy dog.")
     );
 }
 
@@ -71,14 +46,14 @@ fn transcribes_german_and_detects_language() {
     let Some(model) = load_model(Device::Gpu) else {
         return;
     };
-    let samples = speak("Anna", "Heute Abend gehen wir zusammen ins Kino.");
+    let samples = common::speak("Anna", "Heute Abend gehen wir zusammen ins Kino.");
 
     let transcript = model.transcribe(&samples, None).unwrap();
 
     assert_eq!(transcript.language, "de");
     assert_eq!(
-        words(&transcript.text),
-        words("Heute Abend gehen wir zusammen ins Kino.")
+        common::words(&transcript.text),
+        common::words("Heute Abend gehen wir zusammen ins Kino.")
     );
 }
 
@@ -88,7 +63,7 @@ fn language_hint_overrides_detection_and_is_reported_as_code() {
         return;
     };
     // English speech, so detection alone would report "en".
-    let samples = speak("Daniel", "Good morning, how are you today?");
+    let samples = common::speak("Daniel", "Good morning, how are you today?");
 
     let by_code = model.transcribe(&samples, Some("de")).unwrap();
     let by_name = model.transcribe(&samples, Some("german")).unwrap();
@@ -102,12 +77,15 @@ fn transcribes_on_cpu() {
     let Some(model) = load_model(Device::Cpu) else {
         return;
     };
-    let samples = speak("Anna", "Guten Morgen.");
+    let samples = common::speak("Anna", "Guten Morgen.");
 
     let transcript = model.transcribe(&samples, None).unwrap();
 
     assert_eq!(transcript.language, "de");
-    assert_eq!(words(&transcript.text), words("Guten Morgen."));
+    assert_eq!(
+        common::words(&transcript.text),
+        common::words("Guten Morgen.")
+    );
 }
 
 #[test]
