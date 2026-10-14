@@ -232,6 +232,9 @@ impl ParakeetModel {
     /// token, or blank for "nothing new here", and how many encoder frames to skip
     /// before the next step (0 to 4). Skipping over frames where nothing new is said is
     /// what makes it faster than decoders that visit every frame.
+    ///
+    /// Follows onnx-asr's `_AsrWithTransducerDecoding._decoding` (Ilya Stupakov, MIT),
+    /// which drives these ONNX graphs and implements NeMo's greedy TDT decoding.
     fn decode(&mut self, encoded: &Encoded) -> Result<Vec<usize>, TranscribeError> {
         let blank = self.vocabulary.len() - 1;
         let mut tokens = Vec::new();
