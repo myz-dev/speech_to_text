@@ -18,9 +18,10 @@ pub const MEL_BINS: usize = 128;
 /// analyses a 25 ms window, so neighbouring frames overlap.
 pub const HOP_SAMPLES: usize = 160;
 
-/// Shortest input the preprocessor accepts. It extends each edge of the audio by
-/// mirroring 256 samples (half its 512-sample FFT frame), which needs more than 256
-/// samples to mirror.
+/// Shortest input the preprocessor accepts. The graph extends each edge of the audio by
+/// mirroring 256 samples (half its 512-sample FFT frame); the bundled ONNX Runtime 1.31
+/// rejects that unless the input is longer than 256 samples. Older runtimes accept
+/// shorter input.
 pub const MIN_SAMPLES: usize = 257;
 
 const PREPROCESSOR_FILE: &str = "nemo128.onnx";
