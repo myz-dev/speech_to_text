@@ -23,7 +23,7 @@ fn features_have_one_frame_per_10_ms_plus_one() {
     };
     let speech = common::speak("Anna", "Heute Abend gehen wir zusammen ins Kino.");
 
-    // One frame per started hop of 160 samples, plus one: 16159 samples still give
+    // One frame per completed hop of 160 samples, plus one: 16159 samples still give
     // 101 frames, 16160 give 102.
     for (len, frames) in [(16_000, 101), (16_159, 101), (16_160, 102)] {
         let features = model.features(&speech[..len]).unwrap();

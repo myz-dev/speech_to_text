@@ -7,7 +7,6 @@ mod common;
 
 use std::path::{Path, PathBuf};
 
-use common::speak;
 use transcription::Device;
 use transcription::whisper::{TranscribeError, WhisperModel};
 
@@ -41,7 +40,7 @@ fn transcribes_english_and_detects_language() {
     let Some(model) = load_model(Device::Gpu) else {
         return;
     };
-    let samples = speak("Daniel", "The quick brown fox jumps over the lazy dog.");
+    let samples = common::speak("Daniel", "The quick brown fox jumps over the lazy dog.");
 
     let transcript = model.transcribe(&samples, None).unwrap();
 
@@ -57,7 +56,7 @@ fn transcribes_german_and_detects_language() {
     let Some(model) = load_model(Device::Gpu) else {
         return;
     };
-    let samples = speak("Anna", "Heute Abend gehen wir zusammen ins Kino.");
+    let samples = common::speak("Anna", "Heute Abend gehen wir zusammen ins Kino.");
 
     let transcript = model.transcribe(&samples, None).unwrap();
 
@@ -74,7 +73,7 @@ fn language_hint_overrides_detection_and_is_reported_as_code() {
         return;
     };
     // English speech, so detection alone would report "en".
-    let samples = speak("Daniel", "Good morning, how are you today?");
+    let samples = common::speak("Daniel", "Good morning, how are you today?");
 
     let by_code = model.transcribe(&samples, Some("de")).unwrap();
     let by_name = model.transcribe(&samples, Some("german")).unwrap();
@@ -88,7 +87,7 @@ fn transcribes_on_cpu() {
     let Some(model) = load_model(Device::Cpu) else {
         return;
     };
-    let samples = speak("Anna", "Guten Morgen.");
+    let samples = common::speak("Anna", "Guten Morgen.");
 
     let transcript = model.transcribe(&samples, None).unwrap();
 
