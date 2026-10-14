@@ -78,6 +78,15 @@ fn rejects_input_shorter_than_the_analysis_window() {
 }
 
 #[test]
+fn loads_more_than_once_per_process() {
+    let Some(first) = load_model() else { return };
+    let second = load_model().unwrap();
+    drop((first, second));
+
+    load_model().unwrap();
+}
+
+#[test]
 fn missing_model_directory_reports_the_file_path() {
     let err = ParakeetModel::load(Path::new("models/missing"))
         .err()

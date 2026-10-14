@@ -5,7 +5,9 @@
 //! decoder turns those into tokens.
 
 use std::path::{Path, PathBuf};
+use std::sync::{Mutex, PoisonError};
 
+use ort::environment::Environment;
 use ort::session::Session;
 use ort::value::TensorRef;
 
@@ -22,6 +24,23 @@ pub const HOP_SAMPLES: usize = 160;
 pub const MIN_SAMPLES: usize = 257;
 
 const PREPROCESSOR_FILE: &str = "nemo128.onnx";
+
+/// The process's ONNX Runtime environment, shared by all sessions. ort allows only one
+/// environment per process, and never a second one, even after the first is dropped.
+static ENVIRONMENT: Mutex<Option<Environment>> = Mutex::new(None);
+
+/// Returns the shared environment, creating it on first use.
+fn environment() -> Result<Environment, ort::Error> {
+    // The lock only guards an `Option` that is written in one step, so a panic while
+    // holding it cannot leave it inconsistent; ignore poisoning.
+    let mut shared = ENVIRONMENT.lock().unwrap_or_else(PoisonError::into_inner);
+    if let Some(environment) = shared.as_ref() {
+        return Ok(environment.clone());
+    }
+    let environment = ort::init().build()?;
+    *shared = Some(environment.clone());
+    Ok(environment)
+}
 
 #[derive(Debug, thiserror::Error)]
 #[error("cannot load parakeet model {}", path.display())]
@@ -59,8 +78,7 @@ impl ParakeetModel {
     /// Loads the model files from `dir`, e.g. `models/parakeet-tdt-0.6b-v3`.
     pub fn load(dir: &Path) -> Result<Self, LoadModelError> {
         let path = dir.join(PREPROCESSOR_FILE);
-        let preprocessor = ort::init()
-            .build()
+        let preprocessor = environment()
             .and_then(|environment| Session::builder(&environment))
             .and_then(|mut builder| builder.commit_from_file(&path))
             .map_err(|source| LoadModelError { path, source })?;
