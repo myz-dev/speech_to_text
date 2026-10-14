@@ -8,3 +8,6 @@
 /fixtures/**/*.wav
 
 .DS_Store
+
+# Review notes for the current change (see AGENTS.md)
+/.review/

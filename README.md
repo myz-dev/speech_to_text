@@ -9,6 +9,7 @@ non-Apple machines are not supported for now.
 
 Goals, milestones and model candidates are in [PLAN.md](PLAN.md); results go
 into [FINDINGS.md](FINDINGS.md).
+Development rules (for humans and agents) are in [AGENTS.md](AGENTS.md).
 
 ## Repository
 
