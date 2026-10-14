@@ -47,6 +47,12 @@ device setting, which ort configures with its `MaxEfficiency` policy.
 - ort's default policy hands part of the encoder to CoreML on macOS, even without ort's
   `coreml` feature: on empty input the error comes from a node named
   `CoreMLExecutionProvider_…`. With `PreferCPU` it comes from a CPU node (`ConvInteger`).
+- Why CoreML loses: ONNX Runtime's log for the default session reports 3,249 nodes
+  (after optimization), 1,528 of them in 319 separate CoreML partitions and 1,721 on
+  the CPU. All 217 `MatMulInteger` and 77 `ConvInteger` nodes, the int8 matrix
+  multiplications and convolutions that carry the computation, stay on the CPU; CoreML
+  only gets the elementwise and reshaping nodes between them. Every run crosses
+  between CPU and CoreML hundreds of times, and loading compiles 319 CoreML models.
 - The CoreML-assisted output differs from the CPU output by up to 0.135, on values
   that peak at 0.15–0.23. The CPU output is the reference; the effect on transcripts is
   measured once decoding works.
@@ -57,4 +63,5 @@ device setting, which ort configures with its `MaxEfficiency` policy.
 - Unlike Whisper there is no fixed 30 s window: encode time grows with clip length.
 - Conclusion: Parakeet runs on the CPU with `PreferCPU`. It is faster at every length,
   loads ~4× faster, and computes the reference output. The preprocessor's output is
-  identical under both policies.
+  identical under both policies. CoreML could only help with an unquantized encoder
+  whose matrix multiplications it can run itself; not tested.
