@@ -32,23 +32,29 @@ Single runs; model already in the OS file cache.
 ## M2: Parakeet encoder, CPU vs CoreML
 
 Setup: `encoder-model.int8.onnx` (622 MB) through ort 2.0.0-rc.14 / ONNX Runtime 1.31,
-release build, same German `say` clips as M1; third of three runs per clip.
+release build, same German `say` clips as M1; fastest of three runs per clip. "CPU" is
+a session with `AutoDevicePolicy::PreferCPU`; "ort default" is a session without any
+device setting, which ort configures with its `MaxEfficiency` policy.
 
-| Audio  | Encoder frames | Encode on CPU |
-|-------:|---------------:|--------------:|
-| 1.9 s  | 24             | 0.067 s       |
-| 6.1 s  | 77             | 0.142 s       |
-| 20.0 s | 250            | 0.406 s       |
-| 40.1 s | 502            | 0.922 s       |
+| Audio  | Encoder frames | CPU     | ort default (CPU + CoreML) |
+|-------:|---------------:|--------:|---------------------------:|
+| 1.9 s  | 24             | 0.038 s | 0.064 s                    |
+| 6.1 s  | 77             | 0.089 s | 0.141 s                    |
+| 20.0 s | 250            | 0.239 s | 0.409 s                    |
+| 40.1 s | 502            | 0.490 s | 0.888 s                    |
+| session creation | —    | 0.68 s  | 3.01 s                     |
 
-- Unlike Whisper there is no fixed 30 s window: encode time grows with clip length,
-  from ~0.07 s for a short dictation. Session creation takes ~3 s.
-- CoreML execution provider, MLProgram format: session creation fails; CoreML rejects
-  the encoder's unbounded time dimension.
-- CoreML execution provider, NeuralNetwork format (compute units All or
-  CPUAndNeuralEngine): loads, same timings as CPU, and the output is byte-identical to
-  the CPU output, so CoreML runs none of the graph.
-- Conclusion: Parakeet runs on the CPU. For short clips the encoder takes ~0.07 s,
-  where Whisper needs ~1 s for its whole transcription on the GPU; the decoder still
-  adds to Parakeet's time. CoreML would need an unquantized encoder with bounded input
-  shapes, which is not worth pursuing at these timings.
+- ort's default policy hands part of the encoder to CoreML on macOS, even without ort's
+  `coreml` feature: on empty input the error comes from a node named
+  `CoreMLExecutionProvider_…`. With `PreferCPU` it comes from a CPU node (`ConvInteger`).
+- The CoreML-assisted output differs from the CPU output by up to 0.135, on values
+  that peak at 0.15–0.23. The CPU output is the reference; the effect on transcripts is
+  measured once decoding works.
+- Requesting the CoreML execution provider explicitly (ort feature `coreml`,
+  NeuralNetwork format) gives output byte-identical to ort's default session. With the
+  MLProgram format, session creation fails: CoreML rejects the encoder's unbounded time
+  dimension.
+- Unlike Whisper there is no fixed 30 s window: encode time grows with clip length.
+- Conclusion: Parakeet runs on the CPU with `PreferCPU`. It is faster at every length,
+  loads ~4× faster, and computes the reference output. The preprocessor's output is
+  identical under both policies.
