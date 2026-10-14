@@ -2,6 +2,7 @@
 //! Backends: whisper.cpp via whisper-rs (Metal, M1) and
 //! Parakeet TDT via ONNX Runtime (M2). See [PLAN.md](../../../PLAN.md).
 
+pub mod parakeet;
 pub mod whisper;
 
 /// Where a model runs its inference.

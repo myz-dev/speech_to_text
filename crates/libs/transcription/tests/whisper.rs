@@ -3,18 +3,18 @@
 //! Transcription is deterministic for a given input (greedy decoding, fixed seeds), so exact
 //! assertions are stable on one machine; macOS voice or whisper.cpp updates can change them.
 
-use std::path::{Path, PathBuf};
-use std::process::Command;
+mod common;
 
+use std::path::{Path, PathBuf};
+
+use common::speak;
 use transcription::Device;
 use transcription::whisper::{TranscribeError, WhisperModel};
 
 const MODEL_FILE: &str = "ggml-large-v3-turbo.bin";
 
 fn model_path() -> PathBuf {
-    Path::new(env!("CARGO_MANIFEST_DIR"))
-        .join("../../../models")
-        .join(MODEL_FILE)
+    common::models_dir().join(MODEL_FILE)
 }
 
 fn load_model(device: Device) -> Option<WhisperModel> {
@@ -24,20 +24,6 @@ fn load_model(device: Device) -> Option<WhisperModel> {
         return None;
     }
     Some(WhisperModel::load(&path, device).unwrap())
-}
-
-/// Speaks `text` with a macOS voice and returns 16 kHz mono samples.
-fn speak(voice: &str, text: &str) -> Vec<f32> {
-    let dir = tempfile::tempdir().unwrap();
-    let path = dir.path().join("speech.wav");
-    let status = Command::new("say")
-        .args(["-v", voice, "--data-format=LEI16@16000", "-o"])
-        .arg(&path)
-        .arg(text)
-        .status()
-        .unwrap();
-    assert!(status.success(), "say failed for voice {voice}");
-    recording::load_wav(&path).unwrap()
 }
 
 /// Lowercase words without punctuation, for robust comparison.
