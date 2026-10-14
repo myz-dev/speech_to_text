@@ -43,6 +43,9 @@ const VOCABULARY_FILE: &str = "vocab.txt";
 const DECODER_STATE_SHAPE: [usize; 3] = [2, 1, 640];
 const DECODER_STATE_LEN: usize = DECODER_STATE_SHAPE[0] * DECODER_STATE_SHAPE[2];
 
+/// How many frames the decoder can choose to skip after each step: 0 to 4.
+const SKIP_CHOICES: usize = 5;
+
 /// Most tokens written for one encoder frame before moving on. The model can keep
 /// predicting "stay on this frame"; this bounds that loop. onnx-asr reads it from
 /// `config.json` with the same default; the shipped `config.json` does not set it.
@@ -91,6 +94,11 @@ pub enum TranscribeError {
     Inference(#[source] ort::Error),
     #[error("model output {0:?} is missing")]
     MissingOutput(&'static str),
+    #[error(
+        "decoder returned {scores} scores, expected {vocabulary} tokens and {SKIP_CHOICES} \
+         skips; vocab.txt does not match the decoder"
+    )]
+    VocabularyMismatch { vocabulary: usize, scores: usize },
 }
 
 /// The Parakeet ONNX graphs loaded into ONNX Runtime sessions, running on the CPU.
@@ -293,6 +301,12 @@ impl ParakeetModel {
         };
         // One score per vocabulary token, followed by one score per skip (0, 1, 2, ...).
         let scores = extract("outputs")?;
+        if scores.len() != self.vocabulary.len() + SKIP_CHOICES {
+            return Err(TranscribeError::VocabularyMismatch {
+                vocabulary: self.vocabulary.len(),
+                scores: scores.len(),
+            });
+        }
         let (token_scores, skip_scores) = scores.split_at(self.vocabulary.len());
         Ok(Step {
             token: argmax(token_scores),

@@ -181,6 +181,40 @@ fn missing_model_directory_reports_the_file_path() {
 }
 
 #[test]
+fn vocabulary_that_does_not_match_the_decoder_is_an_error() {
+    let models = common::models_dir().join("parakeet-tdt-0.6b-v3");
+    if !models.exists() {
+        eprintln!("skipping: {} not found", models.display());
+        return;
+    }
+    // The real graphs with a vocabulary of 3 instead of 8193 tokens.
+    let dir = tempfile::tempdir().unwrap();
+    for file in [
+        "nemo128.onnx",
+        "encoder-model.int8.onnx",
+        "decoder_joint-model.int8.onnx",
+    ] {
+        std::os::unix::fs::symlink(models.join(file), dir.path().join(file)).unwrap();
+    }
+    std::fs::write(dir.path().join("vocab.txt"), "<unk> 0\n▁a 1\n<blk> 2\n").unwrap();
+    let mut model = ParakeetModel::load(dir.path()).unwrap();
+    let speech = common::speak("Anna", "Guten Morgen.");
+
+    let result = model.transcribe(&speech);
+
+    assert!(
+        matches!(
+            result,
+            Err(TranscribeError::VocabularyMismatch {
+                vocabulary: 3,
+                scores: 8198
+            })
+        ),
+        "{result:?}"
+    );
+}
+
+#[test]
 fn malformed_vocabulary_reports_the_line() {
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("vocab.txt");
