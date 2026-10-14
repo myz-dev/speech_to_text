@@ -33,6 +33,8 @@ claims above independently; do not assume they hold."*
   scanning it once.
 - Prefer free functions whose arguments carry all relevant state. Structs hold data or
   expensive resources (a loaded model), not behavior hierarchies.
+- Methods on such structs are fine when they take `&self` and every other input is an
+  argument; avoid `&mut self` methods that carry hidden state from one call to the next.
 - No factories, builders-for-the-sake-of-it, or layers of indirection. A code path
   should be followable with "go to definition".
 
