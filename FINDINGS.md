@@ -28,3 +28,27 @@ Single runs; model already in the OS file cache.
   cached per binary is the likely candidate).
 - Conclusion: for dictation-length clips (a few seconds) the floor dominates: ~1 s on
   GPU, which is acceptable; ~4.4 s on CPU, which is too slow to feel instant. GPU it is.
+
+## M2: Parakeet encoder, CPU vs CoreML
+
+Setup: `encoder-model.int8.onnx` (622 MB) through ort 2.0.0-rc.14 / ONNX Runtime 1.31,
+release build, same German `say` clips as M1; third of three runs per clip.
+
+| Audio  | Encoder frames | Encode on CPU |
+|-------:|---------------:|--------------:|
+| 1.9 s  | 24             | 0.067 s       |
+| 6.1 s  | 77             | 0.142 s       |
+| 20.0 s | 250            | 0.406 s       |
+| 40.1 s | 502            | 0.922 s       |
+
+- Unlike Whisper there is no fixed 30 s window: encode time grows with clip length,
+  from ~0.07 s for a short dictation. Session creation takes ~3 s.
+- CoreML execution provider, MLProgram format: session creation fails; CoreML rejects
+  the encoder's unbounded time dimension.
+- CoreML execution provider, NeuralNetwork format (compute units All or
+  CPUAndNeuralEngine): loads, same timings as CPU, and the output is byte-identical to
+  the CPU output, so CoreML runs none of the graph.
+- Conclusion: Parakeet runs on the CPU. For short clips the encoder takes ~0.07 s,
+  where Whisper needs ~1 s for its whole transcription on the GPU; the decoder still
+  adds to Parakeet's time. CoreML would need an unquantized encoder with bounded input
+  shapes, which is not worth pursuing at these timings.

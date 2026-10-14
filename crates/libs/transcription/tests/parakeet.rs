@@ -5,7 +5,10 @@ mod common;
 
 use std::path::Path;
 
-use transcription::parakeet::{HOP_SAMPLES, MEL_BINS, MIN_SAMPLES, ParakeetModel, TranscribeError};
+use transcription::parakeet::{
+    ENCODER_DIM, Features, HOP_SAMPLES, MEL_BINS, MIN_SAMPLES, ParakeetModel, SUBSAMPLING,
+    TranscribeError,
+};
 
 fn load_model() -> Option<ParakeetModel> {
     let dir = common::models_dir().join("parakeet-tdt-0.6b-v3");
@@ -80,11 +83,31 @@ fn rejects_input_shorter_than_the_analysis_window() {
 
 #[test]
 fn loads_more_than_once_per_process() {
-    let Some(first) = load_model() else { return };
-    let second = load_model().unwrap();
-    drop((first, second));
-
+    let Some(_first) = load_model() else { return };
     load_model().unwrap();
+}
+
+#[test]
+fn encoder_emits_one_vector_per_8_feature_frames() {
+    let Some(mut model) = load_model() else {
+        return;
+    };
+    let speech = common::speak("Anna", "Heute Abend gehen wir zusammen ins Kino.");
+    let features = model.features(&speech).unwrap();
+
+    let encoded = model.encode(&features).unwrap();
+
+    assert_eq!(encoded.frames, features.frames.div_ceil(SUBSAMPLING));
+    assert_eq!(encoded.data.len(), ENCODER_DIM * encoded.frames);
+
+    // A partial last group of feature frames still produces a frame.
+    for (feature_frames, encoded_frames) in [(1, 1), (8, 1), (9, 2), (16, 2), (17, 3)] {
+        let silence = Features {
+            data: vec![0.0; MEL_BINS * feature_frames],
+            frames: feature_frames,
+        };
+        assert_eq!(model.encode(&silence).unwrap().frames, encoded_frames);
+    }
 }
 
 #[test]

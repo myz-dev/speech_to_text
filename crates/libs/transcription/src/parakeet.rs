@@ -24,7 +24,14 @@ pub const HOP_SAMPLES: usize = 160;
 /// shorter input.
 pub const MIN_SAMPLES: usize = 257;
 
+/// Numbers per encoder output vector.
+pub const ENCODER_DIM: usize = 1024;
+
+/// Feature frames per encoder frame: the encoder outputs one vector per 80 ms.
+pub const SUBSAMPLING: usize = 8;
+
 const PREPROCESSOR_FILE: &str = "nemo128.onnx";
+const ENCODER_FILE: &str = "encoder-model.int8.onnx";
 
 /// The process's ONNX Runtime environment, shared by all sessions. ort allows only one
 /// environment per process, and never a second one, even after the first is dropped.
@@ -62,8 +69,12 @@ pub enum TranscribeError {
 }
 
 /// The Parakeet ONNX graphs loaded into ONNX Runtime sessions.
+///
+/// Runs on the CPU: the CoreML execution provider cannot take over any part of the int8
+/// encoder, so it would only add load time.
 pub struct ParakeetModel {
     preprocessor: Session,
+    encoder: Session,
 }
 
 /// Log-mel spectrogram: how much energy each of [`MEL_BINS`] frequency bands holds, one
@@ -77,15 +88,24 @@ pub struct Features {
     pub frames: usize,
 }
 
+/// Encoder output: one vector of [`ENCODER_DIM`] numbers per 80 ms of audio, describing
+/// what is being said there in a form the decoder can read.
+///
+/// `data` is row-major as the graph returns it: one row of `frames` values per vector
+/// component, so the vector of frame `t` is every `frames`-th value starting at `t`.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Encoded {
+    pub data: Vec<f32>,
+    pub frames: usize,
+}
+
 impl ParakeetModel {
     /// Loads the model files from `dir`, e.g. `models/parakeet-tdt-0.6b-v3`.
     pub fn load(dir: &Path) -> Result<Self, LoadModelError> {
-        let path = dir.join(PREPROCESSOR_FILE);
-        let preprocessor = environment()
-            .and_then(|environment| Session::builder(&environment))
-            .and_then(|mut builder| builder.commit_from_file(&path))
-            .map_err(|source| LoadModelError { path, source })?;
-        Ok(Self { preprocessor })
+        Ok(Self {
+            preprocessor: session(&dir.join(PREPROCESSOR_FILE))?,
+            encoder: session(&dir.join(ENCODER_FILE))?,
+        })
     }
 
     /// Computes the log-mel features of 16 kHz mono samples.
@@ -123,4 +143,44 @@ impl ParakeetModel {
             frames: shape[2] as usize,
         })
     }
+
+    /// Runs the encoder over the whole clip. Produces
+    /// `features.frames.div_ceil(SUBSAMPLING)` frames.
+    pub fn encode(&mut self, features: &Features) -> Result<Encoded, TranscribeError> {
+        let lengths = [features.frames as i64];
+        let inputs = ort::inputs![
+            "audio_signal" => TensorRef::from_array_view(
+                ([1, MEL_BINS, features.frames], features.data.as_slice()),
+            )
+            .map_err(TranscribeError::Inference)?,
+            "length" => TensorRef::from_array_view(([1], lengths.as_slice()))
+                .map_err(TranscribeError::Inference)?,
+        ];
+        let outputs = self
+            .encoder
+            .run(inputs)
+            .map_err(TranscribeError::Inference)?;
+
+        // Shape [batch, ENCODER_DIM, frames].
+        let (shape, data) = outputs
+            .get("outputs")
+            .ok_or(TranscribeError::MissingOutput("outputs"))?
+            .try_extract_tensor::<f32>()
+            .map_err(TranscribeError::Inference)?;
+        Ok(Encoded {
+            data: data.to_vec(),
+            frames: shape[2] as usize,
+        })
+    }
+}
+
+/// Loads one ONNX graph into a session of the shared environment.
+fn session(path: &Path) -> Result<Session, LoadModelError> {
+    environment()
+        .and_then(|environment| Session::builder(&environment))
+        .and_then(|mut builder| builder.commit_from_file(path))
+        .map_err(|source| LoadModelError {
+            path: path.to_path_buf(),
+            source,
+        })
 }
