@@ -2,8 +2,9 @@
 //!
 //! The model is a directory of ONNX graphs run in sequence: `nemo128.onnx` turns audio
 //! into log-mel features, the encoder turns features into acoustic vectors, and the
-//! decoder turns those into tokens.
+//! decoder turns those into tokens, which `vocab.txt` maps to text.
 
+use std::io;
 use std::path::{Path, PathBuf};
 use std::sync::{Mutex, PoisonError};
 
@@ -33,6 +34,16 @@ pub const SUBSAMPLING: usize = 8;
 
 const PREPROCESSOR_FILE: &str = "nemo128.onnx";
 const ENCODER_FILE: &str = "encoder-model.int8.onnx";
+const DECODER_FILE: &str = "decoder_joint-model.int8.onnx";
+const VOCABULARY_FILE: &str = "vocab.txt";
+
+/// The decoder remembers what it has written so far in an LSTM with 2 layers of 640
+/// numbers; the graph takes and returns that memory as two `[2, 1, 640]` tensors.
+const DECODER_STATE_LEN: usize = 2 * 640;
+
+/// Most tokens written for one encoder frame before moving on. The model can keep
+/// predicting "stay on this frame"; this bounds that loop.
+const MAX_TOKENS_PER_FRAME: usize = 10;
 
 /// The process's ONNX Runtime environment, shared by all sessions. ort allows only one
 /// environment per process, and never a second one, even after the first is dropped.
@@ -52,11 +63,21 @@ fn environment() -> Result<Environment, ort::Error> {
 }
 
 #[derive(Debug, thiserror::Error)]
-#[error("cannot load parakeet model {}", path.display())]
-pub struct LoadModelError {
-    path: PathBuf,
-    #[source]
-    source: ort::Error,
+pub enum LoadModelError {
+    #[error("cannot load parakeet model {}", path.display())]
+    Graph {
+        path: PathBuf,
+        #[source]
+        source: ort::Error,
+    },
+    #[error("cannot read parakeet vocabulary {}", path.display())]
+    ReadVocabulary {
+        path: PathBuf,
+        #[source]
+        source: io::Error,
+    },
+    #[error("malformed parakeet vocabulary {} at line {line}", path.display())]
+    MalformedVocabulary { path: PathBuf, line: usize },
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -73,6 +94,9 @@ pub enum TranscribeError {
 pub struct ParakeetModel {
     preprocessor: Session,
     encoder: Session,
+    decoder: Session,
+    /// Token pieces by id, e.g. `"▁Kin"`; the last one is the blank `<blk>`.
+    vocabulary: Vec<String>,
 }
 
 /// Log-mel spectrogram: how much energy each of [`MEL_BINS`] frequency bands holds, one
@@ -101,9 +125,25 @@ impl ParakeetModel {
     /// Loads the model files from `dir`, e.g. `models/parakeet-tdt-0.6b-v3`.
     pub fn load(dir: &Path) -> Result<Self, LoadModelError> {
         Ok(Self {
+            vocabulary: read_vocabulary(&dir.join(VOCABULARY_FILE))?,
             preprocessor: session(&dir.join(PREPROCESSOR_FILE))?,
             encoder: session(&dir.join(ENCODER_FILE))?,
+            decoder: session(&dir.join(DECODER_FILE))?,
         })
+    }
+
+    /// Transcribes 16 kHz mono samples. Parakeet detects the language itself and takes
+    /// no hint.
+    pub fn transcribe(&mut self, samples: &[f32]) -> Result<String, TranscribeError> {
+        let features = self.features(samples)?;
+        let encoded = self.encode(&features)?;
+        let tokens = self.decode(&encoded)?;
+        let text: String = tokens
+            .iter()
+            .map(|&token| self.vocabulary[token].as_str())
+            .collect();
+        // `▁` marks the start of a word.
+        Ok(text.replace('▁', " ").trim().to_string())
     }
 
     /// Computes the log-mel features of 16 kHz mono samples.
@@ -173,6 +213,155 @@ impl ParakeetModel {
             frames: shape[2] as usize,
         })
     }
+
+    /// Turns encoder frames into token ids with greedy TDT decoding.
+    ///
+    /// TDT ("token and duration transducer") predicts two things at each step: the next
+    /// token, or blank for "nothing new here", and how many encoder frames to skip
+    /// before the next step (0 to 4). Skipping over frames where nothing new is said is
+    /// what makes it faster than decoders that visit every frame.
+    fn decode(&mut self, encoded: &Encoded) -> Result<Vec<usize>, TranscribeError> {
+        let blank = self.vocabulary.len() - 1;
+        let mut tokens = Vec::new();
+        let mut state = DecoderState::initial();
+        let mut vector = vec![0.0; ENCODER_DIM];
+        let mut frame = 0;
+        let mut tokens_on_frame = 0;
+
+        while frame < encoded.frames {
+            for (component, value) in vector.iter_mut().enumerate() {
+                *value = encoded.data[component * encoded.frames + frame];
+            }
+            // The decoder reads the last written token; blank stands for "none yet".
+            let previous = tokens.last().copied().unwrap_or(blank);
+            let step = self.decode_step(&vector, previous, &state)?;
+
+            // The new state includes `previous`, which only counts once a real token
+            // follows it; after a blank the decoder keeps its old state.
+            if step.token != blank {
+                tokens.push(step.token);
+                state = step.state;
+                tokens_on_frame += 1;
+            }
+            if step.skip > 0 {
+                frame += step.skip;
+                tokens_on_frame = 0;
+            } else if step.token == blank || tokens_on_frame == MAX_TOKENS_PER_FRAME {
+                frame += 1;
+                tokens_on_frame = 0;
+            }
+        }
+        Ok(tokens)
+    }
+
+    /// Runs the decoder once on one encoder vector and the previously written token.
+    fn decode_step(
+        &mut self,
+        vector: &[f32],
+        previous: usize,
+        state: &DecoderState,
+    ) -> Result<Step, TranscribeError> {
+        let targets = [previous as i32];
+        let target_length = [1_i32];
+        let inputs = ort::inputs![
+            "encoder_outputs" => TensorRef::from_array_view(([1, ENCODER_DIM, 1], vector))
+                .map_err(TranscribeError::Inference)?,
+            "targets" => TensorRef::from_array_view(([1, 1], targets.as_slice()))
+                .map_err(TranscribeError::Inference)?,
+            "target_length" => TensorRef::from_array_view(([1], target_length.as_slice()))
+                .map_err(TranscribeError::Inference)?,
+            "input_states_1" => TensorRef::from_array_view(([2, 1, 640], state.first.as_slice()))
+                .map_err(TranscribeError::Inference)?,
+            "input_states_2" => TensorRef::from_array_view(([2, 1, 640], state.second.as_slice()))
+                .map_err(TranscribeError::Inference)?,
+        ];
+        let outputs = self
+            .decoder
+            .run(inputs)
+            .map_err(TranscribeError::Inference)?;
+
+        let extract = |name: &'static str| -> Result<Vec<f32>, TranscribeError> {
+            let (_, data) = outputs
+                .get(name)
+                .ok_or(TranscribeError::MissingOutput(name))?
+                .try_extract_tensor::<f32>()
+                .map_err(TranscribeError::Inference)?;
+            Ok(data.to_vec())
+        };
+        // One score per vocabulary token, followed by one score per skip (0, 1, 2, ...).
+        let scores = extract("outputs")?;
+        let (token_scores, skip_scores) = scores.split_at(self.vocabulary.len());
+        Ok(Step {
+            token: argmax(token_scores),
+            skip: argmax(skip_scores),
+            state: DecoderState {
+                first: extract("output_states_1")?,
+                second: extract("output_states_2")?,
+            },
+        })
+    }
+}
+
+/// The decoder's memory of the tokens written so far.
+struct DecoderState {
+    first: Vec<f32>,
+    second: Vec<f32>,
+}
+
+impl DecoderState {
+    fn initial() -> Self {
+        Self {
+            first: vec![0.0; DECODER_STATE_LEN],
+            second: vec![0.0; DECODER_STATE_LEN],
+        }
+    }
+}
+
+/// What one decoder step predicts.
+struct Step {
+    token: usize,
+    /// Encoder frames to move forward; 0 means another token may follow on this frame.
+    skip: usize,
+    /// Decoder state after reading the previous token.
+    state: DecoderState,
+}
+
+/// Index of the highest score. `scores` must not be empty.
+fn argmax(scores: &[f32]) -> usize {
+    let mut best = 0;
+    for (index, &score) in scores.iter().enumerate() {
+        if score > scores[best] {
+            best = index;
+        }
+    }
+    best
+}
+
+/// Reads `vocab.txt`: one `piece id` pair per line, ids counting up from 0, ending with
+/// the blank token `<blk>`.
+fn read_vocabulary(path: &Path) -> Result<Vec<String>, LoadModelError> {
+    let content =
+        std::fs::read_to_string(path).map_err(|source| LoadModelError::ReadVocabulary {
+            path: path.to_path_buf(),
+            source,
+        })?;
+    let malformed = |line: usize| LoadModelError::MalformedVocabulary {
+        path: path.to_path_buf(),
+        line,
+    };
+
+    let mut vocabulary = Vec::new();
+    for (index, line) in content.lines().enumerate() {
+        let (piece, id) = line.rsplit_once(' ').ok_or_else(|| malformed(index + 1))?;
+        if id.parse::<usize>() != Ok(index) {
+            return Err(malformed(index + 1));
+        }
+        vocabulary.push(piece.to_string());
+    }
+    if vocabulary.last().map(String::as_str) != Some("<blk>") {
+        return Err(malformed(vocabulary.len()));
+    }
+    Ok(vocabulary)
 }
 
 /// Loads one ONNX graph into a CPU session of the shared environment.
@@ -186,7 +375,7 @@ fn session(path: &Path) -> Result<Session, LoadModelError> {
             .with_auto_device(AutoDevicePolicy::PreferCPU)?
             .commit_from_file(path)
     };
-    build().map_err(|source| LoadModelError {
+    build().map_err(|source| LoadModelError::Graph {
         path: path.to_path_buf(),
         source,
     })

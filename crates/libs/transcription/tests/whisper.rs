@@ -25,16 +25,6 @@ fn load_model(device: Device) -> Option<WhisperModel> {
     Some(WhisperModel::load(&path, device).unwrap())
 }
 
-/// Lowercase words without punctuation, for robust comparison.
-fn words(text: &str) -> Vec<String> {
-    text.split_whitespace()
-        .map(|w| {
-            w.trim_matches(|c: char| !c.is_alphanumeric())
-                .to_lowercase()
-        })
-        .collect()
-}
-
 #[test]
 fn transcribes_english_and_detects_language() {
     let Some(model) = load_model(Device::Gpu) else {
@@ -46,8 +36,8 @@ fn transcribes_english_and_detects_language() {
 
     assert_eq!(transcript.language, "en");
     assert_eq!(
-        words(&transcript.text),
-        words("The quick brown fox jumps over the lazy dog.")
+        common::words(&transcript.text),
+        common::words("The quick brown fox jumps over the lazy dog.")
     );
 }
 
@@ -62,8 +52,8 @@ fn transcribes_german_and_detects_language() {
 
     assert_eq!(transcript.language, "de");
     assert_eq!(
-        words(&transcript.text),
-        words("Heute Abend gehen wir zusammen ins Kino.")
+        common::words(&transcript.text),
+        common::words("Heute Abend gehen wir zusammen ins Kino.")
     );
 }
 
@@ -92,7 +82,10 @@ fn transcribes_on_cpu() {
     let transcript = model.transcribe(&samples, None).unwrap();
 
     assert_eq!(transcript.language, "de");
-    assert_eq!(words(&transcript.text), words("Guten Morgen."));
+    assert_eq!(
+        common::words(&transcript.text),
+        common::words("Guten Morgen.")
+    );
 }
 
 #[test]

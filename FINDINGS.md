@@ -65,3 +65,31 @@ device setting, which ort configures with its `MaxEfficiency` policy.
   loads ~4× faster, and computes the reference output. The preprocessor's output is
   identical under both policies. CoreML could only help with an unquantized encoder
   whose matrix multiplications it can run itself; not tested.
+
+## M2: Parakeet end to end vs Whisper
+
+Setup: `ParakeetModel::transcribe` (preprocessor, encoder, greedy TDT decoding; CPU,
+`PreferCPU`) vs `stt transcribe` with Whisper large-v3-turbo on Metal (M1 entry); same
+German `say` clips, release build, fastest of three runs.
+
+| Audio  | Parakeet total | of which encoder | Whisper inference |
+|-------:|---------------:|-----------------:|------------------:|
+| 1.9 s  | 0.042 s        | 0.038 s          | 1.03 s            |
+| 6.1 s  | 0.101 s        | 0.093 s          | 1.07 s            |
+| 20.0 s | 0.278 s        | 0.243 s          | 1.34 s            |
+| 40.1 s | 0.563 s        | 0.490 s          | 2.03 s            |
+
+- Parakeet is ~25× faster than Whisper on dictation-length clips and ~4× on 40 s;
+  decoding adds 9–15 % to the encoder time. Model load: Parakeet 0.74 s, Whisper 0.4 s.
+- Transcripts: 1.9 s, 6.1 s, 20.0 s and the English fox sentence are correct apart from
+  punctuation. In the 40.1 s clip Parakeet drops "ins Kino" in the repeated sentence;
+  Whisper transcribes it correctly. 2 s of silence and of noise give empty text.
+- Our TDT loop is checked against onnx-asr 0.12 (the reference implementation by the
+  author of the ONNX export): given the same encoder output it makes the same 240
+  decoder calls on the 40.1 s clip.
+- onnx-asr transcribes the 40.1 s clip correctly because its preprocessing differs from
+  `nemo128.onnx` in the model download: it zero-pads the audio edges (the ONNX graph
+  mirrors them) and counts `samples / 160` valid frames, excluding the last one from
+  normalization (the graph counts `samples / 160 + 1`). The resulting small feature
+  differences flip one greedy decision. Which variant is more accurate overall is open
+  until the fixture benchmark (M5).

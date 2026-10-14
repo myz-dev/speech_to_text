@@ -21,3 +21,13 @@ pub fn speak(voice: &str, text: &str) -> Vec<f32> {
     assert!(status.success(), "say failed for voice {voice}");
     recording::load_wav(&path).unwrap()
 }
+
+/// Lowercase words without punctuation, for robust comparison.
+pub fn words(text: &str) -> Vec<String> {
+    text.split_whitespace()
+        .map(|w| {
+            w.trim_matches(|c: char| !c.is_alphanumeric())
+                .to_lowercase()
+        })
+        .collect()
+}

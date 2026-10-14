@@ -20,6 +20,47 @@ fn load_model() -> Option<ParakeetModel> {
 }
 
 #[test]
+fn transcribes_german() {
+    let Some(mut model) = load_model() else {
+        return;
+    };
+    let speech = common::speak("Anna", "Heute Abend gehen wir zusammen ins Kino.");
+
+    let text = model.transcribe(&speech).unwrap();
+
+    assert_eq!(
+        common::words(&text),
+        common::words("Heute Abend gehen wir zusammen ins Kino.")
+    );
+}
+
+#[test]
+fn transcribes_english() {
+    let Some(mut model) = load_model() else {
+        return;
+    };
+    let speech = common::speak("Daniel", "The quick brown fox jumps over the lazy dog.");
+
+    let text = model.transcribe(&speech).unwrap();
+
+    assert_eq!(
+        common::words(&text),
+        common::words("The quick brown fox jumps over the lazy dog.")
+    );
+}
+
+#[test]
+fn silence_gives_no_text() {
+    let Some(mut model) = load_model() else {
+        return;
+    };
+
+    let text = model.transcribe(&[0.0; 32_000]).unwrap();
+
+    assert_eq!(text, "");
+}
+
+#[test]
 fn features_have_one_frame_per_10_ms_plus_one() {
     let Some(mut model) = load_model() else {
         return;
@@ -135,6 +176,20 @@ fn missing_model_directory_reports_the_file_path() {
         .unwrap();
     assert_eq!(
         err.to_string(),
-        "cannot load parakeet model models/missing/nemo128.onnx"
+        "cannot read parakeet vocabulary models/missing/vocab.txt"
+    );
+}
+
+#[test]
+fn malformed_vocabulary_reports_the_line() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("vocab.txt");
+    std::fs::write(&path, "<unk> 0\n▁a 2\n<blk> 2\n").unwrap();
+
+    let err = ParakeetModel::load(dir.path()).err().unwrap();
+
+    assert_eq!(
+        err.to_string(),
+        format!("malformed parakeet vocabulary {} at line 2", path.display())
     );
 }
