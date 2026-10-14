@@ -5,20 +5,23 @@
   human to review in one sitting. Split larger work into steps that each build and pass.
 - Test code is exempt from the size limit, but must stay skimmable: test names state the
   behavior (`rejects_stereo_without_downmix`), so reviewing starts with reading names.
-- After each change: stop. Do not commit. Write the review notes (below), summarize the
-  change, and wait for the human to review and approve.
-- Commits happen only after approval, with the message shown to the human first.
+- After each change: commit it on its branch, write the review notes (below), summarize
+  the change, and stop for the human's review.
+- Review findings become follow-up commits on the same branch, never amends, so the
+  review stays in the history. Type them by what they change (`test:`, `docs:`,
+  `refactor:`); `fix:` is for bugs that reached `main`.
 - Commit messages follow [Conventional Commits](https://www.conventionalcommits.org)
   (`feat(recording): …`, `fix:`, `docs:`, `test:`, `refactor:`, `chore:`; scope = crate
   name), so a changelog can be generated with git-cliff.
 - Never commit to `main` directly: one short-lived branch per change (`m1/whisper`),
-  merged with `git merge --no-ff` after approval.
+  merged with `git merge --no-ff` only after the human approves the review.
 
 ## Review notes
 For every change, write `.review/NOTES.md` (gitignored, overwritten per change). It doubles
 as the prompt for an independent review agent, so write it for a skeptical reader:
 - **Goal:** what was added and to what end (2–3 sentences)
-- **Diff:** how to see it (e.g. `git diff`, or `git diff <base>..HEAD`)
+- **Diff:** how to see it (`git show <sha>` for the change, `git diff main...HEAD` for
+  the branch including review follow-ups)
 - **Design decisions:** each choice with the alternative that was rejected and why
 - **Claims to verify:** concrete statements the reviewer should check, not take on trust
   (e.g. "resampling preserves duration within 1 sample")
