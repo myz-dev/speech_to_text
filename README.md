@@ -4,8 +4,8 @@ An educational project: learning how local speech-to-text works and which
 models run well on Apple silicon. Audio is recorded, transcribed and cleaned
 up by a local LLM entirely on-device, with no cloud services involved.
 
-**Trade-off:** we target Apple silicon (Metal GPU, fast CPU cores) on purpose. Weaker or
-non-Apple machines are not supported for now.
+**Trade-off:** we target Apple silicon (Metal GPU, fast CPU cores) on purpose.
+Weaker or non-Apple machines are not supported for now.
 
 Goals, milestones and model candidates are in [PLAN.md](PLAN.md); results go
 into [FINDINGS.md](FINDINGS.md).
