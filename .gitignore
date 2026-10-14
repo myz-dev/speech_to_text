@@ -1,0 +1,10 @@
+/target
+
+# Model weights (downloaded manually, see PLAN.md)
+/models/*
+!/models/.gitkeep
+
+# Personal voice recordings stay local; reference transcripts are committed
+/fixtures/**/*.wav
+
+.DS_Store
