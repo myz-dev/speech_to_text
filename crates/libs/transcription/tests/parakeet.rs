@@ -111,6 +111,24 @@ fn encoder_emits_one_vector_per_8_feature_frames() {
 }
 
 #[test]
+fn encoder_runs_entirely_on_the_cpu() {
+    let Some(mut model) = load_model() else {
+        return;
+    };
+    let empty = Features {
+        data: Vec::new(),
+        frames: 0,
+    };
+
+    // Empty input fails inside the first node, and the error names that node: a CoreML
+    // partition would show up as `CoreMLExecutionProvider_…`.
+    let Err(TranscribeError::Inference(err)) = model.encode(&empty) else {
+        panic!("expected an inference error for empty input");
+    };
+    assert!(!err.to_string().contains("CoreML"), "{err}");
+}
+
+#[test]
 fn missing_model_directory_reports_the_file_path() {
     let err = ParakeetModel::load(Path::new("models/missing"))
         .err()

@@ -9,6 +9,7 @@ use std::sync::{Mutex, PoisonError};
 
 use ort::environment::Environment;
 use ort::session::Session;
+use ort::session::builder::AutoDevicePolicy;
 use ort::value::TensorRef;
 
 /// Mel frequency bands per feature frame.
@@ -68,10 +69,7 @@ pub enum TranscribeError {
     MissingOutput(&'static str),
 }
 
-/// The Parakeet ONNX graphs loaded into ONNX Runtime sessions.
-///
-/// Runs on the CPU: the CoreML execution provider cannot take over any part of the int8
-/// encoder, so it would only add load time.
+/// The Parakeet ONNX graphs loaded into ONNX Runtime sessions, running on the CPU.
 pub struct ParakeetModel {
     preprocessor: Session,
     encoder: Session,
@@ -146,6 +144,9 @@ impl ParakeetModel {
 
     /// Runs the encoder over the whole clip. Produces
     /// `features.frames.div_ceil(SUBSAMPLING)` frames.
+    ///
+    /// Takes `&mut self` because ONNX Runtime sessions require it to run; no state is
+    /// kept between calls.
     pub fn encode(&mut self, features: &Features) -> Result<Encoded, TranscribeError> {
         let lengths = [features.frames as i64];
         let inputs = ort::inputs![
@@ -174,13 +175,19 @@ impl ParakeetModel {
     }
 }
 
-/// Loads one ONNX graph into a session of the shared environment.
+/// Loads one ONNX graph into a CPU session of the shared environment.
+///
+/// ort's default device policy hands parts of the encoder to CoreML on macOS, even
+/// without its `coreml` feature. That makes session creation ~4× slower, encoding ~1.8×
+/// slower, and changes the output; `PreferCPU` keeps the whole graph on the CPU.
 fn session(path: &Path) -> Result<Session, LoadModelError> {
-    environment()
-        .and_then(|environment| Session::builder(&environment))
-        .and_then(|mut builder| builder.commit_from_file(path))
-        .map_err(|source| LoadModelError {
-            path: path.to_path_buf(),
-            source,
-        })
+    let build = || -> Result<Session, ort::Error> {
+        Session::builder(&environment()?)?
+            .with_auto_device(AutoDevicePolicy::PreferCPU)?
+            .commit_from_file(path)
+    };
+    build().map_err(|source| LoadModelError {
+        path: path.to_path_buf(),
+        source,
+    })
 }
