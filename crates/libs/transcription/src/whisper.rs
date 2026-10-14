@@ -1,5 +1,7 @@
 use std::path::{Path, PathBuf};
 
+use crate::Device;
+
 use whisper_rs::{FullParams, SamplingStrategy, WhisperContext, WhisperContextParameters};
 
 #[derive(Debug, thiserror::Error)]
@@ -20,7 +22,8 @@ pub enum TranscribeError {
     Inference(#[source] whisper_rs::WhisperError),
 }
 
-/// A whisper.cpp model loaded into GPU memory via Metal (whisper-rs feature `metal`).
+/// A whisper.cpp model loaded for inference on a [`Device`]; GPU means Metal
+/// (whisper-rs feature `metal`).
 ///
 /// Loading takes seconds and gigabytes; load once and reuse for every transcription.
 pub struct WhisperModel {
@@ -41,13 +44,15 @@ pub struct Transcript {
 }
 
 impl WhisperModel {
-    /// Loads a ggml model file, e.g. `ggml-large-v3-turbo.bin`.
-    pub fn load(path: &Path) -> Result<Self, LoadModelError> {
+    /// Loads a ggml model file, e.g. `ggml-large-v3-turbo.bin`, onto `device`.
+    pub fn load(path: &Path, device: Device) -> Result<Self, LoadModelError> {
         // whisper.cpp logs every loading and inference step to stderr; discard them.
         whisper_rs::install_logging_hooks();
 
-        let context = WhisperContext::new_with_params(path, WhisperContextParameters::default())
-            .map_err(|source| LoadModelError {
+        let mut params = WhisperContextParameters::default();
+        params.use_gpu(device == Device::Gpu);
+        let context =
+            WhisperContext::new_with_params(path, params).map_err(|source| LoadModelError {
                 path: path.to_path_buf(),
                 source,
             })?;

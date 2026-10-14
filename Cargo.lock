@@ -434,7 +434,9 @@ dependencies = [
  "clap",
  "cleanup",
  "eval",
+ "hound",
  "recording",
+ "tempfile",
  "transcription",
 ]
 

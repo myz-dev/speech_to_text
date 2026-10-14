@@ -6,6 +6,7 @@
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
+use transcription::Device;
 use transcription::whisper::{TranscribeError, WhisperModel};
 
 const MODEL_FILE: &str = "ggml-large-v3-turbo.bin";
@@ -16,13 +17,13 @@ fn model_path() -> PathBuf {
         .join(MODEL_FILE)
 }
 
-fn load_model() -> Option<WhisperModel> {
+fn load_model(device: Device) -> Option<WhisperModel> {
     let path = model_path();
     if !path.exists() {
         eprintln!("skipping: {} not found", path.display());
         return None;
     }
-    Some(WhisperModel::load(&path).unwrap())
+    Some(WhisperModel::load(&path, device).unwrap())
 }
 
 /// Speaks `text` with a macOS voice and returns 16 kHz mono samples.
@@ -51,7 +52,9 @@ fn words(text: &str) -> Vec<String> {
 
 #[test]
 fn transcribes_english_and_detects_language() {
-    let Some(model) = load_model() else { return };
+    let Some(model) = load_model(Device::Gpu) else {
+        return;
+    };
     let samples = speak("Daniel", "The quick brown fox jumps over the lazy dog.");
 
     let transcript = model.transcribe(&samples, None).unwrap();
@@ -65,7 +68,9 @@ fn transcribes_english_and_detects_language() {
 
 #[test]
 fn transcribes_german_and_detects_language() {
-    let Some(model) = load_model() else { return };
+    let Some(model) = load_model(Device::Gpu) else {
+        return;
+    };
     let samples = speak("Anna", "Heute Abend gehen wir zusammen ins Kino.");
 
     let transcript = model.transcribe(&samples, None).unwrap();
@@ -79,7 +84,9 @@ fn transcribes_german_and_detects_language() {
 
 #[test]
 fn language_hint_overrides_detection_and_is_reported_as_code() {
-    let Some(model) = load_model() else { return };
+    let Some(model) = load_model(Device::Gpu) else {
+        return;
+    };
     // English speech, so detection alone would report "en".
     let samples = speak("Daniel", "Good morning, how are you today?");
 
@@ -91,8 +98,23 @@ fn language_hint_overrides_detection_and_is_reported_as_code() {
 }
 
 #[test]
+fn transcribes_on_cpu() {
+    let Some(model) = load_model(Device::Cpu) else {
+        return;
+    };
+    let samples = speak("Anna", "Guten Morgen.");
+
+    let transcript = model.transcribe(&samples, None).unwrap();
+
+    assert_eq!(transcript.language, "de");
+    assert_eq!(words(&transcript.text), words("Guten Morgen."));
+}
+
+#[test]
 fn rejects_invalid_input_before_inference() {
-    let Some(model) = load_model() else { return };
+    let Some(model) = load_model(Device::Gpu) else {
+        return;
+    };
 
     let unknown = model.transcribe(&[0.0; 16_000], Some("klingon"));
     assert!(matches!(unknown, Err(TranscribeError::UnknownLanguage(l)) if l == "klingon"));
@@ -106,7 +128,7 @@ fn rejects_invalid_input_before_inference() {
 
 #[test]
 fn missing_model_file_reports_its_path() {
-    let err = WhisperModel::load(Path::new("models/missing.bin"))
+    let err = WhisperModel::load(Path::new("models/missing.bin"), Device::Gpu)
         .err()
         .unwrap();
     assert_eq!(

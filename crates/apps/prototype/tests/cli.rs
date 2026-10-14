@@ -41,6 +41,6 @@ fn unknown_engine_is_rejected() {
 #[test]
 fn unimplemented_commands_report_their_milestone() {
     let cli = Cli::try_parse_from(["stt", "bench"]).unwrap();
-    let err = prototype::run(cli).unwrap_err();
+    let err = prototype::run(cli, &mut Vec::new()).unwrap_err();
     assert_eq!(err.to_string(), "not implemented yet (M5)");
 }
