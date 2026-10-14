@@ -41,6 +41,7 @@ fn each_mel_bin_is_normalized_over_the_clip() {
     let speech = common::speak("Daniel", "The quick brown fox jumps over the lazy dog.");
 
     let features = model.features(&speech).unwrap();
+    assert_eq!(features.data.len(), MEL_BINS * features.frames);
 
     for (bin, row) in features.data.chunks_exact(features.frames).enumerate() {
         let n = row.len() as f32;
