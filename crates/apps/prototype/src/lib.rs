@@ -147,8 +147,9 @@ fn transcribe_with_parakeet(samples: &[f32], models: &Path) -> anyhow::Result<Ti
     let (model, load_secs) = timed(|| ParakeetModel::load(&path));
     let mut model = model?;
     let (text, inference_secs) = timed(|| model.transcribe(samples));
+    let text = text?;
     Ok(TimedTranscript {
-        text: text?,
+        text,
         language: None,
         load_secs,
         inference_secs,
