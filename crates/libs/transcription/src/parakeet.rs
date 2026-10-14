@@ -84,6 +84,8 @@ pub enum LoadModelError {
     },
     #[error("malformed parakeet vocabulary {} at line {line}", path.display())]
     MalformedVocabulary { path: PathBuf, line: usize },
+    #[error("parakeet vocabulary {} does not end with <blk>", path.display())]
+    MissingBlank { path: PathBuf },
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -393,7 +395,9 @@ fn read_vocabulary(path: &Path) -> Result<Vec<String>, LoadModelError> {
         vocabulary.push(piece.to_string());
     }
     if vocabulary.last().map(String::as_str) != Some("<blk>") {
-        return Err(malformed(vocabulary.len()));
+        return Err(LoadModelError::MissingBlank {
+            path: path.to_path_buf(),
+        });
     }
     Ok(vocabulary)
 }

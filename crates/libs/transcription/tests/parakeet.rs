@@ -61,6 +61,26 @@ fn silence_gives_no_text() {
 }
 
 #[test]
+fn noise_gives_no_text() {
+    let Some(mut model) = load_model() else {
+        return;
+    };
+    // 2 s of white-ish noise from a fixed pseudo-random sequence, so the test is
+    // deterministic.
+    let mut seed: u32 = 1;
+    let noise: Vec<f32> = (0..32_000)
+        .map(|_| {
+            seed = seed.wrapping_mul(1_664_525).wrapping_add(1_013_904_223);
+            (seed >> 8) as f32 / (1 << 24) as f32 * 0.2 - 0.1
+        })
+        .collect();
+
+    let text = model.transcribe(&noise).unwrap();
+
+    assert_eq!(text, "");
+}
+
+#[test]
 fn features_have_one_frame_per_10_ms_plus_one() {
     let Some(mut model) = load_model() else {
         return;
@@ -215,15 +235,61 @@ fn vocabulary_that_does_not_match_the_decoder_is_an_error() {
 }
 
 #[test]
-fn malformed_vocabulary_reports_the_line() {
+fn malformed_vocabulary_is_reported_with_its_line() {
+    for (content, line) in [
+        ("<unk>0\n<blk> 1\n", 1),        // no space between piece and id
+        ("<unk> 0\n▁a 2\n<blk> 2\n", 2), // id does not match the line
+        ("<unk> 0\n▁a x\n<blk> 2\n", 2), // id is not a number
+    ] {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("vocab.txt");
+        std::fs::write(&path, content).unwrap();
+
+        let err = ParakeetModel::load(dir.path()).err().unwrap();
+
+        assert_eq!(
+            err.to_string(),
+            format!(
+                "malformed parakeet vocabulary {} at line {line}",
+                path.display()
+            ),
+            "{content:?}"
+        );
+    }
+}
+
+#[test]
+fn vocabulary_without_blank_is_rejected() {
+    for content in ["<unk> 0\n▁a 1\n", ""] {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("vocab.txt");
+        std::fs::write(&path, content).unwrap();
+
+        let err = ParakeetModel::load(dir.path()).err().unwrap();
+
+        assert_eq!(
+            err.to_string(),
+            format!(
+                "parakeet vocabulary {} does not end with <blk>",
+                path.display()
+            ),
+            "{content:?}"
+        );
+    }
+}
+
+#[test]
+fn missing_graph_file_reports_its_path() {
     let dir = tempfile::tempdir().unwrap();
-    let path = dir.path().join("vocab.txt");
-    std::fs::write(&path, "<unk> 0\n▁a 2\n<blk> 2\n").unwrap();
+    std::fs::write(dir.path().join("vocab.txt"), "<unk> 0\n<blk> 1\n").unwrap();
 
     let err = ParakeetModel::load(dir.path()).err().unwrap();
 
     assert_eq!(
         err.to_string(),
-        format!("malformed parakeet vocabulary {} at line 2", path.display())
+        format!(
+            "cannot load parakeet model {}",
+            dir.path().join("nemo128.onnx").display()
+        )
     );
 }
