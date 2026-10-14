@@ -149,12 +149,11 @@ impl ParakeetModel {
         let features = self.features(samples)?;
         let encoded = self.encode(&features)?;
         let tokens = self.decode(&encoded)?;
-        let text: String = tokens
+        let pieces: String = tokens
             .iter()
             .map(|&token| self.vocabulary[token].as_str())
             .collect();
-        // `▁` marks the start of a word.
-        Ok(text.replace('▁', " ").trim().to_string())
+        Ok(text_from_pieces(&pieces))
     }
 
     /// Computes the log-mel features of 16 kHz mono samples.
@@ -354,6 +353,24 @@ fn argmax(scores: &[f32]) -> usize {
     best
 }
 
+/// Turns joined token pieces into text, as onnx-asr does. `▁` marks the start of a word
+/// and becomes a space, but a space is only kept between a character and a following
+/// letter, digit or `_`: stray `▁` pieces before punctuation or another space vanish.
+fn text_from_pieces(pieces: &str) -> String {
+    let chars: Vec<char> = pieces.replace('▁', " ").chars().collect();
+    let mut text = String::new();
+    for (index, &char) in chars.iter().enumerate() {
+        let before_word = chars
+            .get(index + 1)
+            .is_some_and(|next| next.is_alphanumeric() || *next == '_');
+        if char == ' ' && (index == 0 || !before_word) {
+            continue;
+        }
+        text.push(char);
+    }
+    text
+}
+
 /// Reads `vocab.txt`: one `piece id` pair per line, ids counting up from 0, ending with
 /// the blank token `<blk>`.
 fn read_vocabulary(path: &Path) -> Result<Vec<String>, LoadModelError> {
@@ -396,4 +413,32 @@ fn session(path: &Path) -> Result<Session, LoadModelError> {
         path: path.to_path_buf(),
         source,
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::text_from_pieces;
+
+    #[test]
+    fn word_starts_become_spaces_except_at_the_beginning() {
+        assert_eq!(text_from_pieces("▁Heute▁Abend"), "Heute Abend");
+        assert_eq!(text_from_pieces("▁Kin▁o"), "Kin o");
+    }
+
+    #[test]
+    fn spaces_before_punctuation_and_at_the_end_vanish() {
+        assert_eq!(text_from_pieces("▁Kino▁."), "Kino.");
+        assert_eq!(text_from_pieces("▁it▁'s"), "it's");
+        assert_eq!(text_from_pieces("▁Ende▁"), "Ende");
+    }
+
+    #[test]
+    fn a_standalone_word_start_does_not_double_the_space() {
+        assert_eq!(text_from_pieces("▁Kino▁▁ins"), "Kino ins");
+    }
+
+    #[test]
+    fn empty_input_gives_empty_text() {
+        assert_eq!(text_from_pieces(""), "");
+    }
 }
