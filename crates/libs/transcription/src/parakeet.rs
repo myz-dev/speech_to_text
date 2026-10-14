@@ -57,6 +57,8 @@ pub enum TranscribeError {
     TooShort { samples: usize },
     #[error("parakeet inference failed")]
     Inference(#[source] ort::Error),
+    #[error("model output {0:?} is missing")]
+    MissingOutput(&'static str),
 }
 
 /// The Parakeet ONNX graphs loaded into ONNX Runtime sessions.
@@ -110,9 +112,10 @@ impl ParakeetModel {
             .run(inputs)
             .map_err(TranscribeError::Inference)?;
 
-        // `nemo128.onnx` outputs `features` with shape [batch, MEL_BINS, frames]; a graph
-        // without it fails on the input names above before reaching this index.
-        let (shape, data) = outputs["features"]
+        // Shape [batch, MEL_BINS, frames].
+        let (shape, data) = outputs
+            .get("features")
+            .ok_or(TranscribeError::MissingOutput("features"))?
             .try_extract_tensor::<f32>()
             .map_err(TranscribeError::Inference)?;
         Ok(Features {
