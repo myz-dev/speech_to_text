@@ -8,6 +8,11 @@
 - After each change: stop. Do not commit. Write the review notes (below), summarize the
   change, and wait for the human to review and approve.
 - Commits happen only after approval, with the message shown to the human first.
+- Commit messages follow [Conventional Commits](https://www.conventionalcommits.org)
+  (`feat(recording): …`, `fix:`, `docs:`, `test:`, `refactor:`, `chore:`; scope = crate
+  name), so a changelog can be generated with git-cliff.
+- Never commit to `main` directly: one short-lived branch per change (`m1/whisper`),
+  merged with `git merge --no-ff` after approval.
 
 ## Review notes
 For every change, write `.review/NOTES.md` (gitignored, overwritten per change). It doubles
