@@ -55,14 +55,14 @@ pub enum Command {
 pub struct SttArgs {
     #[arg(short, long, value_enum, default_value_t = Engine::Whisper)]
     pub engine: Engine,
-    /// Language hint for Whisper (de, en); auto-detect if omitted. Parakeet ignores it.
+    /// Language hint for Whisper (de, en); auto-detect if omitted. Parakeet ignores it
     #[arg(short, long)]
     pub language: Option<String>,
     /// Directory containing the model files
     #[arg(long, default_value = "models")]
     pub models: PathBuf,
     /// Run Whisper on the CPU instead of the GPU.
-    /// Ignored for Parakeet, it always runs on the CPU.
+    /// Ignored for Parakeet, it always runs on the CPU
     #[arg(long)]
     pub cpu: bool,
 }
@@ -83,7 +83,8 @@ pub fn run(cli: Cli, out: &mut dyn Write) -> anyhow::Result<()> {
     }
 }
 
-/// Prints the transcript of `file`, then one line with language and timings.
+/// Prints the transcript of `file`, then one line with the language (if the engine
+/// reports one) and timings.
 fn transcribe(file: &Path, stt: &SttArgs, out: &mut dyn Write) -> anyhow::Result<()> {
     let samples = recording::load_wav(file)?;
 
