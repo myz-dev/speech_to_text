@@ -86,10 +86,12 @@ German `say` clips, release build, fastest of three runs.
   Whisper transcribes it correctly. 2 s of silence and of noise give empty text.
 - Our TDT loop is checked against onnx-asr 0.12 (the reference implementation by the
   author of the ONNX export): given the same encoder output it makes the same 240
-  decoder calls on the 40.1 s clip.
+  decoder calls on the 40.1 s clip, and the final texts are identical on the other five
+  test clips.
 - onnx-asr transcribes the 40.1 s clip correctly because its preprocessing differs from
-  `nemo128.onnx` in the model download: it zero-pads the audio edges (the ONNX graph
-  mirrors them) and counts `samples / 160` valid frames, excluding the last one from
-  normalization (the graph counts `samples / 160 + 1`). The resulting small feature
+  `nemo128.onnx` in the model download: its NumPy preprocessor (default on CPU) and its
+  `nemo128_conv.onnx` both zero-pad the audio edges (the downloaded graph mirrors them)
+  and count `samples / 160` valid frames, excluding the last one from normalization (the
+  downloaded graph counts `samples / 160 + 1`). The resulting small feature
   differences flip one greedy decision. Which variant is more accurate overall is open
   until the fixture benchmark (M5).
