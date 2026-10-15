@@ -1,15 +1,20 @@
 //! Prototype app clearing milestones defined in [PLAN.md](../../../PLAN.md).
 
 use std::io::Write;
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 use std::time::Instant;
 
-use anyhow::{Context, bail};
 use clap::{Parser, Subcommand, ValueEnum};
 use cleanup::Language;
 use transcription::Device;
 use transcription::parakeet::ParakeetModel;
 use transcription::whisper::WhisperModel;
+
+pub mod bench;
+pub mod clean;
+pub mod record;
+pub mod run;
+pub mod transcribe;
 
 /// Whisper model file inside the models directory.
 pub const WHISPER_MODEL_FILE: &str = "ggml-large-v3-turbo.bin";
@@ -31,35 +36,15 @@ pub struct Cli {
 #[derive(Debug, Subcommand)]
 pub enum Command {
     /// Transcribe a WAV file (M1 whisper, M2 parakeet)
-    Transcribe {
-        file: PathBuf,
-        #[command(flatten)]
-        stt: SttArgs,
-    },
+    Transcribe(transcribe::Args),
     /// Record from the microphone between two presses of Enter, then transcribe (M3)
-    Record {
-        #[command(flatten)]
-        stt: SttArgs,
-        /// Also save the recording as a 16 kHz mono WAV file, e.g. as a fixture
-        #[arg(long)]
-        save: Option<PathBuf>,
-    },
+    Record(record::Args),
     /// Clean up a raw transcript with the local LLM (M4)
-    Clean {
-        text: String,
-        #[command(flatten)]
-        cleanup: CleanupArgs,
-    },
+    Clean(clean::Args),
     /// Record, transcribe and clean in one go, with per-stage timing (M4)
-    Run {
-        #[command(flatten)]
-        stt: SttArgs,
-    },
+    Run(run::Args),
     /// Run all fixtures and report error rates and latency (M5)
-    Bench {
-        #[arg(long, default_value = "fixtures")]
-        fixtures: PathBuf,
-    },
+    Bench(bench::Args),
 }
 
 #[derive(Debug, clap::Args)]
@@ -112,100 +97,13 @@ pub enum Engine {
 
 /// Executes the parsed command, writing its results to `out`.
 pub fn run(cli: Cli, out: &mut dyn Write) -> anyhow::Result<()> {
-    match cli.command {
-        Command::Transcribe { file, stt } => transcribe(&file, &stt, out),
-        Command::Record { stt, save } => record(&stt, save.as_deref(), out),
-        Command::Clean { text, cleanup } => clean(&text, &cleanup, out),
-        Command::Run { .. } => bail!("not implemented yet (M4)"),
-        Command::Bench { .. } => bail!("not implemented yet (M5)"),
+    match &cli.command {
+        Command::Transcribe(args) => transcribe::execute(args, out),
+        Command::Record(args) => record::execute(args, out),
+        Command::Clean(args) => clean::execute(args, out),
+        Command::Run(args) => run::execute(args, out),
+        Command::Bench(args) => bench::execute(args, out),
     }
-}
-
-/// Prints the transcript of `file`, then one line with the language (if the engine
-/// reports one) and timings.
-fn transcribe(file: &Path, stt: &SttArgs, out: &mut dyn Write) -> anyhow::Result<()> {
-    let samples = recording::load_wav(file)?;
-    let (mut model, load_secs) = timed(|| load_model(stt))?;
-    let (transcript, inference_secs) =
-        timed(|| transcribe_samples(&mut model, &samples, stt.language.as_deref()))?;
-
-    writeln!(out, "{}", transcript.text)?;
-    writeln!(
-        out,
-        "{}",
-        timings_line(&transcript, &samples, load_secs, inference_secs)
-    )?;
-    Ok(())
-}
-
-/// Loads the model, records from the default microphone between two presses of Enter,
-/// then prints the transcript and the timings line of `transcribe`, extended by the
-/// time from the second Enter to the transcript. Prompts go to stderr.
-fn record(stt: &SttArgs, save: Option<&Path>, out: &mut dyn Write) -> anyhow::Result<()> {
-    // Loading first keeps it out of the time from stop to text.
-    let (mut model, load_secs) = timed(|| load_model(stt))?;
-
-    eprint!("Press Enter to start recording.");
-    wait_for_enter()?;
-    eprint!("Recording, press Enter to stop.");
-    let mut enter = Ok(());
-    let mut stopped_at = Instant::now();
-    let recording = recording::record(|| {
-        enter = wait_for_enter();
-        stopped_at = Instant::now();
-    })?;
-    enter?;
-    // Converting the recording to 16 kHz counts towards the time from stop to text.
-    let conversion_secs = stopped_at.elapsed().as_secs_f64();
-
-    let audio_secs = duration_secs(&recording.samples);
-    eprintln!("Recorded {audio_secs:.1} s from {}.", recording.device);
-    if recording.overruns > 0 {
-        eprintln!(
-            "warning: the device reported {} overload(s); the audio may have gaps",
-            recording.overruns
-        );
-    }
-    if recording.samples.is_empty() {
-        bail!("no audio recorded");
-    }
-    if let Some(path) = save {
-        recording::save_wav(path, &recording.samples)?;
-    }
-
-    let (transcript, inference_secs) =
-        timed(|| transcribe_samples(&mut model, &recording.samples, stt.language.as_deref()))?;
-
-    writeln!(out, "{}", transcript.text)?;
-    writeln!(
-        out,
-        "{} | stop to text {:.2} s",
-        timings_line(&transcript, &recording.samples, load_secs, inference_secs),
-        conversion_secs + inference_secs,
-    )?;
-    Ok(())
-}
-
-/// Blocks until a line is read from stdin. At the end of input it returns at once.
-fn wait_for_enter() -> anyhow::Result<()> {
-    std::io::stdin()
-        .read_line(&mut String::new())
-        .context("cannot read from stdin")?;
-    Ok(())
-}
-
-/// Prints the cleaned `text`, then one line with the model and how long cleanup took.
-fn clean(text: &str, cleanup: &CleanupArgs, out: &mut dyn Write) -> anyhow::Result<()> {
-    let (cleaned, cleanup_secs) = timed(|| {
-        Ok(cleanup::clean(
-            &cleanup.model,
-            text,
-            cleanup.language.into(),
-        )?)
-    })?;
-    writeln!(out, "{cleaned}")?;
-    writeln!(out, "model {} | cleanup {cleanup_secs:.2} s", cleanup.model)?;
-    Ok(())
 }
 
 /// A loaded speech model of the engine chosen on the command line.

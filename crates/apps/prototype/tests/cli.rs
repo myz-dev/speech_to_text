@@ -6,12 +6,12 @@ use prototype::{Cli, Command, DEFAULT_CLEANUP_MODEL, Engine, Lang};
 #[test]
 fn transcribe_defaults_to_whisper_without_language() {
     let cli = Cli::try_parse_from(["stt", "transcribe", "clip.wav"]).unwrap();
-    let Command::Transcribe { file, stt } = cli.command else {
+    let Command::Transcribe(args) = cli.command else {
         panic!("expected transcribe, got {:?}", cli.command);
     };
-    assert_eq!(file.to_str(), Some("clip.wav"));
-    assert_eq!(stt.engine, Engine::Whisper);
-    assert_eq!(stt.language, None);
+    assert_eq!(args.file.to_str(), Some("clip.wav"));
+    assert_eq!(args.stt.engine, Engine::Whisper);
+    assert_eq!(args.stt.language, None);
 }
 
 #[test]
@@ -26,11 +26,11 @@ fn transcribe_accepts_engine_and_language() {
         "de",
     ])
     .unwrap();
-    let Command::Transcribe { stt, .. } = cli.command else {
+    let Command::Transcribe(args) = cli.command else {
         panic!("expected transcribe, got {:?}", cli.command);
     };
-    assert_eq!(stt.engine, Engine::Parakeet);
-    assert_eq!(stt.language.as_deref(), Some("de"));
+    assert_eq!(args.stt.engine, Engine::Parakeet);
+    assert_eq!(args.stt.language.as_deref(), Some("de"));
 }
 
 #[test]
@@ -41,21 +41,21 @@ fn unknown_engine_is_rejected() {
 #[test]
 fn record_saves_nothing_by_default() {
     let cli = Cli::try_parse_from(["stt", "record", "-e", "parakeet"]).unwrap();
-    let Command::Record { stt, save } = cli.command else {
+    let Command::Record(args) = cli.command else {
         panic!("expected record, got {:?}", cli.command);
     };
-    assert_eq!(stt.engine, Engine::Parakeet);
-    assert_eq!(save, None);
+    assert_eq!(args.stt.engine, Engine::Parakeet);
+    assert_eq!(args.save, None);
 }
 
 #[test]
 fn record_accepts_save_path() {
     let cli = Cli::try_parse_from(["stt", "record", "--save", "fixtures/de/note.wav"]).unwrap();
-    let Command::Record { save, .. } = cli.command else {
+    let Command::Record(args) = cli.command else {
         panic!("expected record, got {:?}", cli.command);
     };
     assert_eq!(
-        save.as_deref().and_then(|p| p.to_str()),
+        args.save.as_deref().and_then(|p| p.to_str()),
         Some("fixtures/de/note.wav")
     );
 }
@@ -68,12 +68,12 @@ fn clean_requires_a_language() {
 #[test]
 fn clean_defaults_to_the_default_model() {
     let cli = Cli::try_parse_from(["stt", "clean", "äh hallo", "-l", "de"]).unwrap();
-    let Command::Clean { text, cleanup } = cli.command else {
+    let Command::Clean(args) = cli.command else {
         panic!("expected clean, got {:?}", cli.command);
     };
-    assert_eq!(text, "äh hallo");
-    assert_eq!(cleanup.language, Lang::De);
-    assert_eq!(cleanup.model, DEFAULT_CLEANUP_MODEL);
+    assert_eq!(args.text, "äh hallo");
+    assert_eq!(args.cleanup.language, Lang::De);
+    assert_eq!(args.cleanup.model, DEFAULT_CLEANUP_MODEL);
 }
 
 #[test]
