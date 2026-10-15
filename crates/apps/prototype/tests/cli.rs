@@ -87,6 +87,29 @@ fn whisper_language_hint_is_limited_to_de_and_en() {
 }
 
 #[test]
+fn run_defaults_to_the_default_cleanup_model() {
+    let cli = Cli::try_parse_from(["stt", "run", "-e", "parakeet", "-l", "de"]).unwrap();
+    let Command::Run(args) = cli.command else {
+        panic!("expected run, got {:?}", cli.command);
+    };
+    assert_eq!(args.stt.engine, Engine::Parakeet);
+    assert_eq!(args.stt.language, Some(Lang::De));
+    assert_eq!(args.model, DEFAULT_CLEANUP_MODEL);
+    assert_eq!(args.save, None);
+}
+
+#[test]
+fn run_with_parakeet_requires_a_language_before_loading() {
+    // --models points nowhere: the error must come before any model is loaded.
+    let cli = Cli::try_parse_from(["stt", "run", "-e", "parakeet", "--models", "nowhere"]).unwrap();
+    let err = prototype::run(cli, &mut Vec::new()).unwrap_err();
+    assert_eq!(
+        err.to_string(),
+        "parakeet does not detect the language; pass -l de or -l en"
+    );
+}
+
+#[test]
 fn unimplemented_commands_report_their_milestone() {
     let cli = Cli::try_parse_from(["stt", "bench"]).unwrap();
     let err = prototype::run(cli, &mut Vec::new()).unwrap_err();
