@@ -182,3 +182,43 @@ single runs.
   language hint, can switch to English. Accuracy needs real dictation (M5).
 - `say` speech contains no real hesitations: both engines drop "äh"/"ähm" from it
   themselves, so it does not exercise the cleanup's filler removal.
+
+## Conclusion: prototype close-out
+
+The prototype stops after M4; the fixture benchmark (M5) was not run. Speed and the
+cleanup's failure modes are answered; accuracy on real dictation is not.
+
+**Answered**
+- **Latency target is reachable with Parakeet.** Stop to cleaned text: Parakeet +
+  gemma3:4b 0.99 s (7.5 s audio) and 2.13 s (32 s audio); Whisper + gemma3:4b 1.97 s
+  and 4.05 s. The < 3 s target for 30 s of audio holds only with Parakeet.
+- **Parakeet runs on the CPU, Whisper on Metal.** Parakeet transcribes 2–40 s in
+  0.04–0.56 s; ort's default CoreML partitioning is ~1.8× slower and must be avoided
+  with `PreferCPU`. Whisper has a ~1 s floor per 30 s window on GPU, ~4.4 s on CPU.
+- **The cleanup is the slowest stage** for longer dictation (1.6–2.0 s for ~70 words),
+  because the LLM rewrites the whole text; it grows with text length.
+- **Models must be resident before recording starts.** Loads: Whisper 0.4 s,
+  Parakeet 0.7 s, LLM ~1.7 s cold, 0.1–0.3 s warm. A freshly built binary's first
+  Whisper load takes ~6 s.
+- **The cleanup prompt must name the language.** Otherwise 4B models translate in
+  either direction; with the language named and the transcript in `<transcript>` tags,
+  0 of 14 probes were translated. So the pipeline needs the
+  language: Whisper detects it, Parakeet needs it from the user.
+- **The cleanup can change meaning** while fixing recognition errors ("in 3 Uhr" →
+  "um 15:00 Uhr"). It is not safe to apply silently without a way to see the raw text.
+- **Thinking models do not fit.** `qwen3:4b` reasons even with `think: false`; use
+  `qwen3:4b-instruct`.
+- **macOS microphone:** a denied permission yields digital silence, not an error; an
+  input stream keeps its device when the default changes; overloads while the
+  permission dialog is open are harmless.
+
+**Open**
+- WER on real dictation in German and English, per engine, including code-switching.
+- Whether prompt tuning or a larger model (8–12B) stops meaning changes, and at what
+  latency.
+- RAM with both models resident.
+
+**Recommendation for the app:** Parakeet (CPU) + gemma3:4b or qwen3:4b-instruct via
+Ollama, both loaded at startup, an explicit de/en setting, and the raw transcript kept
+alongside the cleaned text. The app should be able to save dictations as fixtures, so
+accuracy is measured on real use.
