@@ -139,7 +139,7 @@ gemma3:4b and qwen3:4b-instruct (both Q4_K_M), models loaded.
 |---|---|---|
 | "Keep the language of the transcript. Never translate." | 2 of 10 German translated to English | 10 of 10 German translated; dictated email written out |
 | Stronger "same language as the transcript" rule | 4 of 4 English translated to German | 0 translated; dictated instruction dropped |
-| Same, plus one German and one English example pair | 3 of 4 English translated to German | 0 translated; dictated email written out |
+| Same, plus one German and one English example pair | 4 of 4 English translated to German (one partly) | 0 translated; dictated email written out |
 | "The transcript is in {language}. Write your reply in {language}." + `<transcript>` tags | 0 | 0 |
 
 - Small models translate whenever they have to infer the language, in either
