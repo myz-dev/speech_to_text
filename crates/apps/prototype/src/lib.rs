@@ -123,7 +123,7 @@ fn record(stt: &SttArgs, save: Option<&Path>, out: &mut dyn Write) -> anyhow::Re
     // Converting the recording to 16 kHz counts towards the time from stop to text.
     let conversion_secs = stopped_at.elapsed().as_secs_f64();
 
-    let audio_secs = recording.samples.len() as f64 / f64::from(recording::SAMPLE_RATE);
+    let audio_secs = duration_secs(&recording.samples);
     eprintln!("Recorded {audio_secs:.1} s from {}.", recording.device);
     if recording.overruns > 0 {
         eprintln!(
@@ -217,7 +217,7 @@ fn timings_line(
     load_secs: f64,
     inference_secs: f64,
 ) -> String {
-    let audio_secs = samples.len() as f64 / f64::from(recording::SAMPLE_RATE);
+    let audio_secs = duration_secs(samples);
     // Real-time factor: inference time per second of audio; below 1 is faster than real time.
     let rtf = inference_secs / audio_secs;
     // Parakeet does not report the language it heard.
@@ -229,6 +229,11 @@ fn timings_line(
         "{language}audio {audio_secs:.1} s | load {load_secs:.2} s | \
          inference {inference_secs:.2} s | real-time factor {rtf:.2}"
     )
+}
+
+/// Length of 16 kHz `samples` in seconds.
+fn duration_secs(samples: &[f32]) -> f64 {
+    samples.len() as f64 / f64::from(recording::SAMPLE_RATE)
 }
 
 /// Runs `f` and returns its result with the elapsed seconds.
