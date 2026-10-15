@@ -105,7 +105,7 @@ pub fn record(wait: impl FnOnce()) -> Result<Recording, RecordError> {
     drop(stream);
 
     let errors: Vec<cpal::Error> = error_receiver.try_iter().collect();
-    if let Some(source) = first_fatal_error(&errors) {
+    if let Some(source) = errors.iter().find(|error| is_fatal(error)) {
         return Err(RecordError::Stream {
             device: name,
             source: source.clone(),
@@ -150,16 +150,27 @@ where
     )
 }
 
-/// The first stream error that ends the recording. Not fatal: a rerouted default device
-/// keeps recording, missing real-time scheduling only risks glitches, and glitches
-/// themselves are counted by [`count_overruns`].
-fn first_fatal_error(errors: &[cpal::Error]) -> Option<&cpal::Error> {
-    errors.iter().find(|error| {
-        !matches!(
-            error.kind(),
-            ErrorKind::DeviceChanged | ErrorKind::RealtimeDenied | ErrorKind::Xrun
-        )
-    })
+/// Whether a stream error ends the recording.
+///
+/// Recoverable, the recording continues:
+/// - `DeviceChanged`: the default device was rerouted, e.g. to headphones that were just
+///   plugged in, and the stream keeps recording from the new device.
+/// - `RealtimeDenied`: the audio thread runs without real-time priority. It only risks
+///   glitches, and those are reported as `Xrun` themselves.
+/// - `Xrun`: a device overload that may have left a short gap in the audio. Counted in
+///   [`Recording::overruns`] instead, because macOS reports it for the whole device, not
+///   for this stream.
+///
+/// Fatal: every other kind, which means the stream stopped delivering audio or can no
+/// longer be trusted, e.g. `DeviceNotAvailable` (microphone unplugged) or
+/// `StreamInvalidated` (device sample rate changed, so the samples no longer match
+/// the rate we resample from). `ErrorKind` is non-exhaustive, so kinds added by future
+/// cpal versions count as fatal until classified here.
+fn is_fatal(error: &cpal::Error) -> bool {
+    !matches!(
+        error.kind(),
+        ErrorKind::DeviceChanged | ErrorKind::RealtimeDenied | ErrorKind::Xrun
+    )
 }
 
 fn count_overruns(errors: &[cpal::Error]) -> usize {
@@ -204,20 +215,21 @@ mod tests {
     }
 
     #[test]
-    fn rerouted_device_denied_realtime_and_overrun_are_not_fatal() {
-        let errors = [
-            ErrorKind::DeviceChanged.into(),
-            ErrorKind::RealtimeDenied.into(),
-            ErrorKind::Xrun.into(),
-        ];
-        assert!(first_fatal_error(&errors).is_none());
+    fn rerouted_device_denied_realtime_and_overrun_are_recoverable() {
+        for kind in [
+            ErrorKind::DeviceChanged,
+            ErrorKind::RealtimeDenied,
+            ErrorKind::Xrun,
+        ] {
+            assert!(!is_fatal(&kind.into()), "{kind:?}");
+        }
     }
 
     #[test]
-    fn disconnected_device_is_fatal() {
-        let errors = [ErrorKind::Xrun.into(), ErrorKind::DeviceNotAvailable.into()];
-        let error = first_fatal_error(&errors).unwrap();
-        assert_eq!(error.kind(), ErrorKind::DeviceNotAvailable);
+    fn disconnected_device_and_changed_sample_rate_are_fatal() {
+        for kind in [ErrorKind::DeviceNotAvailable, ErrorKind::StreamInvalidated] {
+            assert!(is_fatal(&kind.into()), "{kind:?}");
+        }
     }
 
     #[test]
