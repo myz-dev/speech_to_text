@@ -54,7 +54,7 @@ pub(crate) fn execute(args: &Args, out: &mut dyn Write) -> anyhow::Result<()> {
     }
 
     let (transcript, inference_secs) =
-        timed(|| transcribe_samples(&mut model, &recording.samples, stt.language.as_deref()))?;
+        timed(|| transcribe_samples(&mut model, &recording.samples, stt.language))?;
 
     writeln!(out, "{}", transcript.text)?;
     writeln!(

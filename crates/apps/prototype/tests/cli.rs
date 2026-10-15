@@ -30,7 +30,7 @@ fn transcribe_accepts_engine_and_language() {
         panic!("expected transcribe, got {:?}", cli.command);
     };
     assert_eq!(args.stt.engine, Engine::Parakeet);
-    assert_eq!(args.stt.language.as_deref(), Some("de"));
+    assert_eq!(args.stt.language, Some(Lang::De));
 }
 
 #[test]
@@ -72,13 +72,18 @@ fn clean_defaults_to_the_default_model() {
         panic!("expected clean, got {:?}", cli.command);
     };
     assert_eq!(args.text, "äh hallo");
-    assert_eq!(args.cleanup.language, Lang::De);
-    assert_eq!(args.cleanup.model, DEFAULT_CLEANUP_MODEL);
+    assert_eq!(args.language, Lang::De);
+    assert_eq!(args.model, DEFAULT_CLEANUP_MODEL);
 }
 
 #[test]
 fn clean_rejects_unsupported_language() {
     assert!(Cli::try_parse_from(["stt", "clean", "bonjour", "-l", "fr"]).is_err());
+}
+
+#[test]
+fn whisper_language_hint_is_limited_to_de_and_en() {
+    assert!(Cli::try_parse_from(["stt", "transcribe", "clip.wav", "-l", "fr"]).is_err());
 }
 
 #[test]

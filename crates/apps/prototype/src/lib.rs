@@ -51,9 +51,10 @@ pub enum Command {
 pub struct SttArgs {
     #[arg(short, long, value_enum, default_value_t = Engine::Whisper)]
     pub engine: Engine,
-    /// Language hint for Whisper (de, en); auto-detect if omitted. Parakeet ignores it
-    #[arg(short, long)]
-    pub language: Option<String>,
+    /// Language spoken. Whisper uses it as a hint and detects the language if it is
+    /// omitted; Parakeet ignores it
+    #[arg(short, long, value_enum)]
+    pub language: Option<Lang>,
     /// Directory containing the model files
     #[arg(long, default_value = "models")]
     pub models: PathBuf,
@@ -63,21 +64,21 @@ pub struct SttArgs {
     pub cpu: bool,
 }
 
-#[derive(Debug, clap::Args)]
-pub struct CleanupArgs {
-    /// Language of the transcript; the cleaned text stays in it
-    #[arg(short, long, value_enum)]
-    pub language: Lang,
-    /// Ollama model for the cleanup
-    #[arg(short, long, default_value = DEFAULT_CLEANUP_MODEL)]
-    pub model: String,
-}
-
-/// A language the cleanup supports, as given on the command line.
+/// A language the prototype supports, as given on the command line.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
 pub enum Lang {
     De,
     En,
+}
+
+impl Lang {
+    /// ISO 639-1 code, as Whisper expects it.
+    pub fn code(self) -> &'static str {
+        match self {
+            Lang::De => "de",
+            Lang::En => "en",
+        }
+    }
 }
 
 impl From<Lang> for Language {
@@ -139,11 +140,11 @@ struct Transcript {
 fn transcribe_samples(
     model: &mut Model,
     samples: &[f32],
-    language: Option<&str>,
+    language: Option<Lang>,
 ) -> anyhow::Result<Transcript> {
     Ok(match model {
         Model::Whisper(model) => {
-            let transcript = model.transcribe(samples, language)?;
+            let transcript = model.transcribe(samples, language.map(Lang::code))?;
             Transcript {
                 text: transcript.text,
                 language: Some(transcript.language),

@@ -19,7 +19,7 @@ pub(crate) fn execute(args: &Args, out: &mut dyn Write) -> anyhow::Result<()> {
     let samples = recording::load_wav(&args.file)?;
     let (mut model, load_secs) = timed(|| load_model(stt))?;
     let (transcript, inference_secs) =
-        timed(|| transcribe_samples(&mut model, &samples, stt.language.as_deref()))?;
+        timed(|| transcribe_samples(&mut model, &samples, stt.language))?;
 
     writeln!(out, "{}", transcript.text)?;
     writeln!(
