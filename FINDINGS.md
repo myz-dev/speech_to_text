@@ -113,3 +113,29 @@ the German sentence "Guten Morgen, das ist ein Test der Spracherkennung." spoken
 - A recording saved with `--save` transcribes to the same text with `stt transcribe`.
 - macOS can report a device overload (cpal `Xrun`) while the microphone permission
   dialog is open; it is counted as a warning, not an error. Later recordings showed none.
+
+## M4: Ollama's qwen3:4b cannot turn thinking off
+
+Setup: Ollama 0.32, `/api/chat` with `"think": false`.
+
+- Ollama's `qwen3:4b` tag is Qwen3-4B-Thinking-2507 (`general.finetune: Thinking`,
+  `general.version: 2507`). Its chat template always opens a `<think>` block, so
+  `think: false` has no effect: the reasoning lands in `message.content`, followed by
+  `</think>` and the answer. "Say hi" took 195 tokens and 2.6 s with the model loaded;
+  cleaning "hallo" took 57 s including the model load.
+- `cleanup::clean` therefore rejects any response that contains `</think>`.
+- Conclusion: the qwen3 candidate is `qwen3:4b-instruct-2507`, the non-thinking variant.
+
+## M4: gemma3:4b cleanup, first impressions
+
+Setup: `cleanup::clean` with `gemma3:4b` (Q4_K_M), temperature 0, model loaded; the
+five sentences of `crates/libs/cleanup/tests/ollama.rs`.
+
+- 0.5–0.9 s per sentence.
+- It removes fillers and fixes punctuation and capitalization, keeps German German and
+  English terms inside German sentences English, and does not answer a dictated
+  question or write a dictated email.
+- Without an explicit "questions end with a question mark" rule it left a dictated
+  question unpunctuated; with the rule it adds the comma and question mark.
+- It keeps "Also," at the start of a German sentence (filler or not is ambiguous) and
+  drops "so basically" in English.
