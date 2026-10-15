@@ -23,13 +23,17 @@ fn main() {
             // A menu-bar app: no Dock icon and no menu bar of its own.
             app.set_activation_policy(ActivationPolicy::Accessory);
             tray::create(app.handle())?;
-            app.manage(worker::spawn(app.handle().clone()));
-            if let Err(error) = shortcut::register(app.handle()) {
-                let error = anyhow::Error::new(error).context(format!(
-                    "cannot register the hotkey {}",
-                    shortcut::HOTKEY_LABEL
-                ));
-                status::publish(app.handle(), Status::error(&error));
+            match shortcut::register(app.handle()) {
+                Ok(()) => {
+                    app.manage(worker::spawn(app.handle().clone()));
+                }
+                Err(error) => {
+                    let error = anyhow::Error::new(error).context(format!(
+                        "cannot register the hotkey {}",
+                        shortcut::HOTKEY_LABEL
+                    ));
+                    status::publish(app.handle(), Status::error(&error));
+                }
             }
             Ok(())
         })
