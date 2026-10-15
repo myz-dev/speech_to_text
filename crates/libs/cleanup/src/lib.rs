@@ -89,27 +89,43 @@ pub enum CleanError {
 pub fn clean(model: &str, transcript: &str, language: Language) -> Result<String, CleanError> {
     let system = system_prompt(language);
     let user = format!("<transcript>{transcript}</transcript>");
+    let messages = [
+        Message {
+            role: "system",
+            content: &system,
+        },
+        Message {
+            role: "user",
+            content: &user,
+        },
+    ];
+    let content = chat(model, &messages)?;
+    // A thinking-only model ends its reasoning with this tag and puts the answer after.
+    if content.contains("</think>") {
+        return Err(CleanError::ThinkingModel {
+            model: model.to_owned(),
+        });
+    }
+    Ok(content.trim().to_owned())
+}
+
+/// Makes Ollama load `model` into memory, so the next [`clean`] does not wait for it.
+/// Ollama keeps a model loaded for 5 minutes after its last use.
+pub fn load(model: &str) -> Result<(), CleanError> {
+    // A chat request without messages only loads the model.
+    chat(model, &[])?;
+    Ok(())
+}
+
+/// Sends `messages` to `model` and returns the content of the reply.
+fn chat(model: &str, messages: &[Message]) -> Result<String, CleanError> {
     let request = ChatRequest {
         model,
-        messages: [
-            Message {
-                role: "system",
-                content: &system,
-            },
-            Message {
-                role: "user",
-                content: &user,
-            },
-        ],
+        messages,
         stream: false,
         think: false,
         options: Options { temperature: 0.0 },
     };
-    let response_error = |source| CleanError::Response {
-        model: model.to_owned(),
-        source,
-    };
-
     let mut response = ureq::post(format!("{OLLAMA_URL}/api/chat"))
         .config()
         // Read Ollama's error message from the body instead of getting a bare status.
@@ -132,26 +148,21 @@ pub fn clean(model: &str, transcript: &str, language: Language) -> Result<String
         });
     }
 
-    let content = response
+    let response = response
         .body_mut()
         .read_json::<ChatResponse>()
-        .map_err(response_error)?
-        .message
-        .content;
-    // A thinking-only model ends its reasoning with this tag and puts the answer after.
-    if content.contains("</think>") {
-        return Err(CleanError::ThinkingModel {
+        .map_err(|source| CleanError::Response {
             model: model.to_owned(),
-        });
-    }
-    Ok(content.trim().to_owned())
+            source,
+        })?;
+    Ok(response.message.content)
 }
 
 /// Body of `POST /api/chat`.
 #[derive(Serialize)]
 struct ChatRequest<'a> {
     model: &'a str,
-    messages: [Message<'a>; 2],
+    messages: &'a [Message<'a>],
     /// One JSON response instead of a stream of partial ones.
     stream: bool,
     think: bool,
