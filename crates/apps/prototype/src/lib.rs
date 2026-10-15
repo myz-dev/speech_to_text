@@ -87,73 +87,92 @@ pub fn run(cli: Cli, out: &mut dyn Write) -> anyhow::Result<()> {
 /// reports one) and timings.
 fn transcribe(file: &Path, stt: &SttArgs, out: &mut dyn Write) -> anyhow::Result<()> {
     let samples = recording::load_wav(file)?;
+    let (mut model, load_secs) = load_model(stt)?;
+    let (transcript, inference_secs) =
+        timed(|| transcribe_samples(&mut model, &samples, stt.language.as_deref()));
+    let transcript = transcript?;
 
-    let result = match stt.engine {
-        Engine::Whisper => {
-            let device = if stt.cpu { Device::Cpu } else { Device::Gpu };
-            transcribe_with_whisper(&samples, &stt.models, stt.language.as_deref(), device)?
-        }
-        Engine::Parakeet => transcribe_with_parakeet(&samples, &stt.models)?,
-    };
-
-    let audio_secs = samples.len() as f64 / f64::from(recording::SAMPLE_RATE);
-    // Real-time factor: inference time per second of audio; below 1 is faster than real time.
-    let rtf = result.inference_secs / audio_secs;
-    // Parakeet does not report the language it heard.
-    let language = result
-        .language
-        .map(|code| format!("language {code} | "))
-        .unwrap_or_default();
-    writeln!(out, "{}", result.text)?;
+    writeln!(out, "{}", transcript.text)?;
     writeln!(
         out,
-        "{language}audio {audio_secs:.1} s | load {:.2} s | \
-         inference {:.2} s | real-time factor {rtf:.2}",
-        result.load_secs, result.inference_secs,
+        "{}",
+        timings_line(&transcript, &samples, load_secs, inference_secs)
     )?;
     Ok(())
 }
 
-/// A transcript with how long loading the model and transcribing took.
-struct TimedTranscript {
+/// A loaded speech model of the engine chosen on the command line.
+enum Model {
+    Whisper(WhisperModel),
+    Parakeet(ParakeetModel),
+}
+
+/// Loads the model for `stt.engine` and returns it with the elapsed seconds.
+fn load_model(stt: &SttArgs) -> anyhow::Result<(Model, f64)> {
+    let (model, load_secs) = timed(|| -> anyhow::Result<Model> {
+        Ok(match stt.engine {
+            Engine::Whisper => {
+                let device = if stt.cpu { Device::Cpu } else { Device::Gpu };
+                let path = stt.models.join(WHISPER_MODEL_FILE);
+                Model::Whisper(WhisperModel::load(&path, device)?)
+            }
+            Engine::Parakeet => {
+                let path = stt.models.join(PARAKEET_MODEL_DIR);
+                Model::Parakeet(ParakeetModel::load(&path)?)
+            }
+        })
+    });
+    Ok((model?, load_secs))
+}
+
+struct Transcript {
     text: String,
     /// Language code the engine transcribed in, if it reports one.
     language: Option<&'static str>,
+}
+
+/// Transcribes 16 kHz mono `samples`. `language` is a hint for Whisper; Parakeet
+/// ignores it.
+fn transcribe_samples(
+    model: &mut Model,
+    samples: &[f32],
+    language: Option<&str>,
+) -> anyhow::Result<Transcript> {
+    Ok(match model {
+        Model::Whisper(model) => {
+            let transcript = model.transcribe(samples, language)?;
+            Transcript {
+                text: transcript.text,
+                language: Some(transcript.language),
+            }
+        }
+        Model::Parakeet(model) => Transcript {
+            text: model.transcribe(samples)?,
+            language: None,
+        },
+    })
+}
+
+/// The summary line after a transcript: language (if the engine reports one), audio
+/// length, load and inference time, and real-time factor.
+fn timings_line(
+    transcript: &Transcript,
+    samples: &[f32],
     load_secs: f64,
     inference_secs: f64,
-}
-
-fn transcribe_with_whisper(
-    samples: &[f32],
-    models: &Path,
-    language: Option<&str>,
-    device: Device,
-) -> anyhow::Result<TimedTranscript> {
-    let path = models.join(WHISPER_MODEL_FILE);
-    let (model, load_secs) = timed(|| WhisperModel::load(&path, device));
-    let model = model?;
-    let (transcript, inference_secs) = timed(|| model.transcribe(samples, language));
-    let transcript = transcript?;
-    Ok(TimedTranscript {
-        text: transcript.text,
-        language: Some(transcript.language),
-        load_secs,
-        inference_secs,
-    })
-}
-
-fn transcribe_with_parakeet(samples: &[f32], models: &Path) -> anyhow::Result<TimedTranscript> {
-    let path = models.join(PARAKEET_MODEL_DIR);
-    let (model, load_secs) = timed(|| ParakeetModel::load(&path));
-    let mut model = model?;
-    let (text, inference_secs) = timed(|| model.transcribe(samples));
-    let text = text?;
-    Ok(TimedTranscript {
-        text,
-        language: None,
-        load_secs,
-        inference_secs,
-    })
+) -> String {
+    let audio_secs = samples.len() as f64 / f64::from(recording::SAMPLE_RATE);
+    // Real-time factor: inference time per second of audio; below 1 is faster than real time.
+    let rtf = inference_secs / audio_secs;
+    // Parakeet does not report the language it heard.
+    let language = transcript
+        .language
+        .map(|code| format!("language {code} | "))
+        .unwrap_or_default();
+    format!(
+        "{language}audio {audio_secs:.1} s | load {load_secs:.2} s | \
+         inference {inference_secs:.2} s | real-time factor {rtf:.2}"
+    )
 }
 
 /// Runs `f` and returns its result with the elapsed seconds.
