@@ -12,3 +12,21 @@ h1 {
   font-size: 1.2rem;
   margin: 0 0 8px;
 }
+
+.hint {
+  color: GrayText;
+  font-size: 0.85rem;
+}
+
+#status.recording {
+  color: #d1242f;
+  font-weight: 600;
+}
+
+#status.error {
+  color: #d1242f;
+}
+
+#transcript {
+  white-space: pre-wrap;
+}
