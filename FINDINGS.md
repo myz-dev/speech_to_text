@@ -113,3 +113,42 @@ the German sentence "Guten Morgen, das ist ein Test der Spracherkennung." spoken
 - A recording saved with `--save` transcribes to the same text with `stt transcribe`.
 - macOS can report a device overload (cpal `Xrun`) while the microphone permission
   dialog is open; it is counted as a warning, not an error. Later recordings showed none.
+
+## M4: Ollama's qwen3:4b cannot turn thinking off
+
+Setup: Ollama 0.32, `/api/chat` with `"think": false`.
+
+- Ollama's `qwen3:4b` tag is Qwen3-4B-Thinking-2507 (`general.finetune: Thinking`,
+  `general.version: 2507`). Its chat template always opens a `<think>` block, so
+  `think: false` has no effect: the reasoning lands in `message.content`, followed by
+  `</think>` and the answer. "Say hi" took 195 tokens and 2.6 s with the model loaded;
+  cleaning "hallo" took 57 s including the model load.
+- `cleanup::clean` therefore rejects any response that contains `</think>`.
+- In Ollama's registry `qwen3:4b` and `qwen3:4b-thinking` share one model blob, as do
+  `qwen3:4b-instruct` and `qwen3:4b-instruct-2507-q4_K_M`; there is no tag
+  `qwen3:4b-instruct-2507`.
+- Conclusion: the qwen3 candidate is `qwen3:4b-instruct`, the non-thinking variant.
+
+## M4: The cleanup prompt must name the language
+
+Setup: `/api/chat`, temperature 0, `think: false`; 14 short probe sentences (10 German,
+4 English, with hesitations, a dictated question and a dictated instruction) with
+gemma3:4b and qwen3:4b-instruct (both Q4_K_M), models loaded.
+
+| System prompt | gemma3:4b | qwen3:4b-instruct |
+|---|---|---|
+| "Keep the language of the transcript. Never translate." | 2 of 10 German translated to English | 10 of 10 German translated; dictated email written out |
+| Stronger "same language as the transcript" rule | 4 of 4 English translated to German | 0 translated; dictated instruction dropped |
+| Same, plus one German and one English example pair | 4 of 4 English translated to German (one partly) | 0 translated; dictated email written out |
+| "The transcript is in {language}. Write your reply in {language}." + `<transcript>` tags | 0 | 0 |
+
+- Small models translate whenever they have to infer the language, in either
+  direction. Naming the language stops it, so `clean` takes a `Language`; Whisper
+  detects it, Parakeet needs it from the user.
+- Listing "also" and "like" as fillers makes models delete them where they carry
+  meaning ("I also like…"); the prompt lists only hesitation sounds.
+- "Delete every hesitation sound …, wherever it occurs, including at the start" makes
+  gemma3:4b drop a leading "Äh," that it keeps with "Remove hesitation sounds".
+- Open for M5: gemma3:4b keeps a leading English "Um,"; qwen3:4b-instruct changed
+  "auf drei Uhr" to "um drei Uhr" (meaning change) and drops a leading "Also".
+- 0.5–1.3 s per sentence with the model loaded.
