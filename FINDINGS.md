@@ -95,3 +95,21 @@ German `say` clips, release build, fastest of three runs.
   downloaded graph counts `samples / 160 + 1`). The resulting small feature
   differences flip one greedy decision. Which variant is more accurate overall is open
   until the fixture benchmark (M5).
+
+## M3: Microphone to transcript
+
+Setup: `stt record` (release build), built-in MacBook Pro microphone (48 kHz mono f32);
+the German sentence "Guten Morgen, das ist ein Test der Spracherkennung." spoken by
+`say` (voice Anna) through the built-in speakers. Single runs, model warm.
+
+| Engine   | Audio | Inference | Stop to text |
+|----------|------:|----------:|-------------:|
+| Parakeet | 5.5 s | 0.11 s    | 0.13 s       |
+| Whisper  | 5.6 s | 1.05 s    | 1.07 s       |
+
+- Both transcripts are exact, including through speaker and room acoustics.
+- Stop to text adds ~0.02 s to inference: draining the capture channel and resampling
+  48 kHz to 16 kHz. Recording itself adds no meaningful latency.
+- A recording saved with `--save` transcribes to the same text with `stt transcribe`.
+- macOS can report a device overload (cpal `Xrun`) while the microphone permission
+  dialog is open; it is counted as a warning, not an error. Later recordings showed none.

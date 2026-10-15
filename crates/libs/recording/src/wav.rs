@@ -1,6 +1,6 @@
 use std::path::{Path, PathBuf};
 
-use hound::{SampleFormat, WavReader};
+use hound::{SampleFormat, WavReader, WavSpec, WavWriter};
 
 use crate::SAMPLE_RATE;
 use crate::convert::{ResampleError, resample, to_mono};
@@ -19,6 +19,14 @@ pub enum LoadWavError {
         #[source]
         source: ResampleError,
     },
+}
+
+#[derive(Debug, thiserror::Error)]
+#[error("cannot write {}", path.display())]
+pub struct SaveWavError {
+    pub path: PathBuf,
+    #[source]
+    pub source: hound::Error,
 }
 
 /// Loads a WAV file as 16 kHz mono samples, the input format of the speech models.
@@ -40,6 +48,26 @@ pub fn load_wav(path: &Path) -> Result<Vec<f32>, LoadWavError> {
         path: path.to_path_buf(),
         source,
     })
+}
+
+/// Saves 16 kHz mono samples as a 32-bit float WAV file, so [`load_wav`] reads back
+/// exactly the same samples.
+pub fn save_wav(path: &Path, samples: &[f32]) -> Result<(), SaveWavError> {
+    let write_error = |source| SaveWavError {
+        path: path.to_path_buf(),
+        source,
+    };
+    let spec = WavSpec {
+        channels: 1,
+        sample_rate: SAMPLE_RATE,
+        bits_per_sample: 32,
+        sample_format: SampleFormat::Float,
+    };
+    let mut writer = WavWriter::create(path, spec).map_err(write_error)?;
+    for &sample in samples {
+        writer.write_sample(sample).map_err(write_error)?;
+    }
+    writer.finalize().map_err(write_error)
 }
 
 /// Reads all samples as `f32`, still interleaved. Integers are scaled to `-1.0..1.0`;
