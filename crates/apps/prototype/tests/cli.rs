@@ -39,6 +39,28 @@ fn unknown_engine_is_rejected() {
 }
 
 #[test]
+fn record_saves_nothing_by_default() {
+    let cli = Cli::try_parse_from(["stt", "record", "-e", "parakeet"]).unwrap();
+    let Command::Record { stt, save } = cli.command else {
+        panic!("expected record, got {:?}", cli.command);
+    };
+    assert_eq!(stt.engine, Engine::Parakeet);
+    assert_eq!(save, None);
+}
+
+#[test]
+fn record_accepts_save_path() {
+    let cli = Cli::try_parse_from(["stt", "record", "--save", "fixtures/de/note.wav"]).unwrap();
+    let Command::Record { save, .. } = cli.command else {
+        panic!("expected record, got {:?}", cli.command);
+    };
+    assert_eq!(
+        save.as_deref().and_then(|p| p.to_str()),
+        Some("fixtures/de/note.wav")
+    );
+}
+
+#[test]
 fn unimplemented_commands_report_their_milestone() {
     let cli = Cli::try_parse_from(["stt", "bench"]).unwrap();
     let err = prototype::run(cli, &mut Vec::new()).unwrap_err();

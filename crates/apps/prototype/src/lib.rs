@@ -4,7 +4,7 @@ use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::time::Instant;
 
-use anyhow::bail;
+use anyhow::{Context, bail};
 use clap::{Parser, Subcommand, ValueEnum};
 use transcription::Device;
 use transcription::parakeet::ParakeetModel;
@@ -32,10 +32,13 @@ pub enum Command {
         #[command(flatten)]
         stt: SttArgs,
     },
-    /// Record from the microphone until Enter is pressed, then transcribe (M3)
+    /// Record from the microphone between two presses of Enter, then transcribe (M3)
     Record {
         #[command(flatten)]
         stt: SttArgs,
+        /// Also save the recording as a 16 kHz mono WAV file, e.g. as a fixture
+        #[arg(long)]
+        save: Option<PathBuf>,
     },
     /// Clean up a raw transcript with the local LLM (M4)
     Clean { text: String },
@@ -77,7 +80,7 @@ pub enum Engine {
 pub fn run(cli: Cli, out: &mut dyn Write) -> anyhow::Result<()> {
     match cli.command {
         Command::Transcribe { file, stt } => transcribe(&file, &stt, out),
-        Command::Record { .. } => bail!("not implemented yet (M3)"),
+        Command::Record { stt, save } => record(&stt, save.as_deref(), out),
         Command::Clean { .. } | Command::Run { .. } => bail!("not implemented yet (M4)"),
         Command::Bench { .. } => bail!("not implemented yet (M5)"),
     }
@@ -98,6 +101,63 @@ fn transcribe(file: &Path, stt: &SttArgs, out: &mut dyn Write) -> anyhow::Result
         "{}",
         timings_line(&transcript, &samples, load_secs, inference_secs)
     )?;
+    Ok(())
+}
+
+/// Loads the model, records from the default microphone between two presses of Enter,
+/// then prints the transcript and the timings line of `transcribe`, extended by the
+/// time from the second Enter to the transcript. Prompts go to stderr.
+fn record(stt: &SttArgs, save: Option<&Path>, out: &mut dyn Write) -> anyhow::Result<()> {
+    // Loading first keeps it out of the time from stop to text.
+    let (mut model, load_secs) = load_model(stt)?;
+
+    eprint!("Press Enter to start recording.");
+    wait_for_enter()?;
+    eprint!("Recording, press Enter to stop.");
+    let mut enter = Ok(());
+    let mut stopped_at = Instant::now();
+    let recording = recording::record(|| {
+        enter = wait_for_enter();
+        stopped_at = Instant::now();
+    })?;
+    enter?;
+    // Converting the recording to 16 kHz counts towards the time from stop to text.
+    let conversion_secs = stopped_at.elapsed().as_secs_f64();
+
+    let audio_secs = recording.samples.len() as f64 / f64::from(recording::SAMPLE_RATE);
+    eprintln!("Recorded {audio_secs:.1} s from {}.", recording.device);
+    if recording.overruns > 0 {
+        eprintln!(
+            "warning: the device reported {} overload(s); the audio may have gaps",
+            recording.overruns
+        );
+    }
+    if recording.samples.is_empty() {
+        bail!("no audio recorded");
+    }
+    if let Some(path) = save {
+        recording::save_wav(path, &recording.samples)?;
+    }
+
+    let (transcript, inference_secs) =
+        timed(|| transcribe_samples(&mut model, &recording.samples, stt.language.as_deref()));
+    let transcript = transcript?;
+
+    writeln!(out, "{}", transcript.text)?;
+    writeln!(
+        out,
+        "{} | stop to text {:.2} s",
+        timings_line(&transcript, &recording.samples, load_secs, inference_secs),
+        conversion_secs + inference_secs,
+    )?;
+    Ok(())
+}
+
+/// Blocks until a line is read from stdin. At the end of input it returns at once.
+fn wait_for_enter() -> anyhow::Result<()> {
+    std::io::stdin()
+        .read_line(&mut String::new())
+        .context("cannot read from stdin")?;
     Ok(())
 }
 
