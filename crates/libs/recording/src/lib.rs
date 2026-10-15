@@ -9,7 +9,7 @@ mod wav;
 
 pub use convert::{ResampleError, resample, to_mono};
 pub use microphone::{RecordError, Recording, record};
-pub use wav::{LoadWavError, load_wav};
+pub use wav::{LoadWavError, SaveWavError, load_wav, save_wav};
 
 /// Sample rate expected by both Whisper and Parakeet.
 pub const SAMPLE_RATE: u32 = 16_000;
