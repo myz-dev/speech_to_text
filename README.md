@@ -15,7 +15,8 @@ Development rules (for humans and agents) are in [AGENTS.md](AGENTS.md).
 
 | Path | Contents |
 |---|---|
-| `crates/apps/` | Executables: the `stt` CLI prototype and the `dictate` Tauri app |
+| `crates/apps/dictate` | The Tauri app |
+| `crates/apps/prototype` | The `stt` CLI prototype (excluded from root commands, use `-p prototype`) |
 | `crates/libs/` | Reusable libraries (recording, transcription, cleanup, eval) |
 | `fixtures/` | Test recordings (local only) and reference transcripts |
 | `models/` | Model weights (local only, see [PLAN.md](PLAN.md#model-files-models-gitignored)) |
@@ -31,13 +32,12 @@ Development rules (for humans and agents) are in [AGENTS.md](AGENTS.md).
 ## Commands
 
 ```bash
-cargo build                                                # build everything
-cargo nextest run                                          # run all tests
-cargo nextest run -p transcription                         # test one crate
-cargo test --doc                                           # doctests (nextest doesn't run these)
-cargo run -p prototype -- transcribe clip.wav -e parakeet  # run the CLI
-cargo run -p prototype -- --help                           # list commands
-(cd crates/apps/dictate/ui && npm install)                 # once, for the app
-(cd crates/apps/dictate && cargo tauri dev)                # run the app
-cargo doc --workspace --no-deps --open                     # browse the docs
+(cd crates/apps/dictate/ui && npm install)  # once: frontend dependencies
+(cd crates/apps/dictate && cargo tauri dev) # run the app
+cargo build                                 # build the app and libraries
+cargo nextest run                           # run their tests
+cargo nextest run -p transcription          # test one crate
+cargo test --doc                            # doctests (nextest doesn't run these)
+cargo doc --workspace --no-deps --open      # browse the docs
+cargo run -p prototype -- --help            # the stt prototype CLI
 ```

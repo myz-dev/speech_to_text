@@ -68,6 +68,5 @@ crates/libs/transcription  STT backends (whisper-rs, Parakeet via ort)
 crates/libs/cleanup        LLM backends (Ollama, later embedded llama.cpp)
 crates/libs/eval           WER + latency harness
 ```
-When `crates/apps/actual-app` arrives, set
-`default-members = ["crates/apps/actual-app", "crates/libs/*"]`;
-to retire the prototype, add it to `exclude` or delete it.
+The app is `crates/apps/dictate`; `default-members` leaves the prototype out of root
+commands. To retire the prototype, delete it.

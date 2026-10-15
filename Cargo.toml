@@ -1,6 +1,9 @@
 [workspace]
 resolver = "3"
 members = ["crates/apps/*", "crates/libs/*"]
+# Root commands (build, test, run) cover the app and the libraries. The `stt` prototype
+# is built only on request: `-p prototype`.
+default-members = ["crates/apps/dictate", "crates/libs/*"]
 
 [workspace.package]
 version = "0.1.0"
