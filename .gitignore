@@ -11,3 +11,8 @@
 
 # Review notes for the current change (see AGENTS.md)
 /.review/
+
+# Tauri app: frontend dependencies and build output, generated schemas
+node_modules/
+/crates/apps/dictate/ui/dist/
+/crates/apps/dictate/gen/
