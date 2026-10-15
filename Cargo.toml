@@ -17,6 +17,7 @@ eval = { path = "crates/libs/eval" }
 # External
 anyhow = "1.0.104"
 clap = { version = "4.6.7", features = ["derive"] }
+cpal = "0.18.2"
 hound = "3.5.1"
 # Release candidate: its API changes between rc versions, so pin the exact version.
 ort = "=2.0.0-rc.14"
