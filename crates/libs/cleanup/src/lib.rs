@@ -43,7 +43,7 @@ pub enum CleanError {
     },
     #[error(
         "{model} reasons before answering even with thinking turned off; \
-         use a non-thinking variant such as qwen3:4b-instruct-2507"
+         use a non-thinking variant such as qwen3:4b-instruct"
     )]
     ThinkingModel { model: String },
 }

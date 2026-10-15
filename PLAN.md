@@ -24,7 +24,7 @@ GUI, global hotkey, paste-at-cursor, streaming, packaging/signing.
 |---|---|---|
 | STT | whisper large-v3-turbo (f16, q5_0), whisper small; large-v3 as reference | whisper-rs (Metal) |
 | STT | parakeet-tdt-0.6b-v3 (int8; fp32 as reference) | ort (ONNX Runtime, CPU vs. CoreML EP) |
-| Cleanup | qwen3:4b-instruct-2507, gemma3:4b; step-up: qwen3:8b, gemma3:12b; baseline llama3.2:3b | Ollama |
+| Cleanup | qwen3:4b-instruct, gemma3:4b; step-up: qwen3:8b, gemma3:12b; baseline llama3.2:3b | Ollama |
 
 ## Model files (`models/`, gitignored)
 | Path | Source |

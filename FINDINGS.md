@@ -124,7 +124,10 @@ Setup: Ollama 0.32, `/api/chat` with `"think": false`.
   `</think>` and the answer. "Say hi" took 195 tokens and 2.6 s with the model loaded;
   cleaning "hallo" took 57 s including the model load.
 - `cleanup::clean` therefore rejects any response that contains `</think>`.
-- Conclusion: the qwen3 candidate is `qwen3:4b-instruct-2507`, the non-thinking variant.
+- In Ollama's registry `qwen3:4b` and `qwen3:4b-thinking` share one model blob, as do
+  `qwen3:4b-instruct` and `qwen3:4b-instruct-2507-q4_K_M`; there is no tag
+  `qwen3:4b-instruct-2507`.
+- Conclusion: the qwen3 candidate is `qwen3:4b-instruct`, the non-thinking variant.
 
 ## M4: gemma3:4b cleanup, first impressions
 
