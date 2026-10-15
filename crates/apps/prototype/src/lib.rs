@@ -90,10 +90,9 @@ pub fn run(cli: Cli, out: &mut dyn Write) -> anyhow::Result<()> {
 /// reports one) and timings.
 fn transcribe(file: &Path, stt: &SttArgs, out: &mut dyn Write) -> anyhow::Result<()> {
     let samples = recording::load_wav(file)?;
-    let (mut model, load_secs) = load_model(stt)?;
+    let (mut model, load_secs) = timed(|| load_model(stt))?;
     let (transcript, inference_secs) =
-        timed(|| transcribe_samples(&mut model, &samples, stt.language.as_deref()));
-    let transcript = transcript?;
+        timed(|| transcribe_samples(&mut model, &samples, stt.language.as_deref()))?;
 
     writeln!(out, "{}", transcript.text)?;
     writeln!(
@@ -109,7 +108,7 @@ fn transcribe(file: &Path, stt: &SttArgs, out: &mut dyn Write) -> anyhow::Result
 /// time from the second Enter to the transcript. Prompts go to stderr.
 fn record(stt: &SttArgs, save: Option<&Path>, out: &mut dyn Write) -> anyhow::Result<()> {
     // Loading first keeps it out of the time from stop to text.
-    let (mut model, load_secs) = load_model(stt)?;
+    let (mut model, load_secs) = timed(|| load_model(stt))?;
 
     eprint!("Press Enter to start recording.");
     wait_for_enter()?;
@@ -140,8 +139,7 @@ fn record(stt: &SttArgs, save: Option<&Path>, out: &mut dyn Write) -> anyhow::Re
     }
 
     let (transcript, inference_secs) =
-        timed(|| transcribe_samples(&mut model, &recording.samples, stt.language.as_deref()));
-    let transcript = transcript?;
+        timed(|| transcribe_samples(&mut model, &recording.samples, stt.language.as_deref()))?;
 
     writeln!(out, "{}", transcript.text)?;
     writeln!(
@@ -167,22 +165,20 @@ enum Model {
     Parakeet(ParakeetModel),
 }
 
-/// Loads the model for `stt.engine` and returns it with the elapsed seconds.
-fn load_model(stt: &SttArgs) -> anyhow::Result<(Model, f64)> {
-    let (model, load_secs) = timed(|| -> anyhow::Result<Model> {
-        Ok(match stt.engine {
-            Engine::Whisper => {
-                let device = if stt.cpu { Device::Cpu } else { Device::Gpu };
-                let path = stt.models.join(WHISPER_MODEL_FILE);
-                Model::Whisper(WhisperModel::load(&path, device)?)
-            }
-            Engine::Parakeet => {
-                let path = stt.models.join(PARAKEET_MODEL_DIR);
-                Model::Parakeet(ParakeetModel::load(&path)?)
-            }
-        })
-    });
-    Ok((model?, load_secs))
+/// Loads the model for `stt.engine`.
+fn load_model(stt: &SttArgs) -> anyhow::Result<Model> {
+    let model = match stt.engine {
+        Engine::Whisper => {
+            let device = if stt.cpu { Device::Cpu } else { Device::Gpu };
+            let path = stt.models.join(WHISPER_MODEL_FILE);
+            Model::Whisper(WhisperModel::load(&path, device)?)
+        }
+        Engine::Parakeet => {
+            let path = stt.models.join(PARAKEET_MODEL_DIR);
+            Model::Parakeet(ParakeetModel::load(&path)?)
+        }
+    };
+    Ok(model)
 }
 
 struct Transcript {
@@ -236,8 +232,8 @@ fn timings_line(
 }
 
 /// Runs `f` and returns its result with the elapsed seconds.
-fn timed<T>(f: impl FnOnce() -> T) -> (T, f64) {
+fn timed<T>(f: impl FnOnce() -> anyhow::Result<T>) -> anyhow::Result<(T, f64)> {
     let start = Instant::now();
-    let result = f();
-    (result, start.elapsed().as_secs_f64())
+    let result = f()?;
+    Ok((result, start.elapsed().as_secs_f64()))
 }
