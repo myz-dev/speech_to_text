@@ -7,7 +7,7 @@ use anyhow::bail;
 
 use crate::{
     DEFAULT_CLEANUP_MODEL, Engine, Lang, SttArgs, duration_secs, load_model, record_dictation,
-    timed, transcribe_samples,
+    timed,
 };
 
 #[derive(Debug, clap::Args)]
@@ -42,7 +42,7 @@ pub(crate) fn execute(args: &Args, out: &mut dyn Write) -> anyhow::Result<()> {
 
     let dictation = record_dictation(args.save.as_deref())?;
     let (transcript, transcribe_secs) =
-        timed(|| transcribe_samples(&mut model, &dictation.samples, stt.language))?;
+        timed(|| Ok(model.transcribe(&dictation.samples, stt.language.map(Lang::code))?))?;
     // An LLM given an empty transcript tends to invent text.
     if transcript.text.trim().is_empty() {
         bail!("no speech recognized");

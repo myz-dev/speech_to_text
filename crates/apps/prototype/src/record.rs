@@ -3,7 +3,7 @@
 use std::io::Write;
 use std::path::PathBuf;
 
-use crate::{SttArgs, load_model, record_dictation, timed, timings_line, transcribe_samples};
+use crate::{Lang, SttArgs, load_model, record_dictation, timed, timings_line};
 
 #[derive(Debug, clap::Args)]
 pub struct Args {
@@ -23,7 +23,7 @@ pub(crate) fn execute(args: &Args, out: &mut dyn Write) -> anyhow::Result<()> {
     let (mut model, load_secs) = timed(|| load_model(stt))?;
     let dictation = record_dictation(args.save.as_deref())?;
     let (transcript, inference_secs) =
-        timed(|| transcribe_samples(&mut model, &dictation.samples, stt.language))?;
+        timed(|| Ok(model.transcribe(&dictation.samples, stt.language.map(Lang::code))?))?;
 
     writeln!(out, "{}", transcript.text)?;
     writeln!(
