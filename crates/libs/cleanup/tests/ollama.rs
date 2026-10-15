@@ -3,7 +3,7 @@
 //! Outputs are deterministic (temperature 0), but asserted loosely so that prompt
 //! wording can change without rewriting the tests.
 
-use cleanup::{CleanError, Language, OLLAMA_URL, clean};
+use cleanup::{CleanError, Language, OLLAMA_URL, clean, load};
 
 const MODELS: [&str; 2] = ["gemma3:4b", "qwen3:4b-instruct"];
 
@@ -175,5 +175,24 @@ fn unknown_model_is_rejected_with_ollamas_message() {
         err.to_string(),
         "ollama rejected the request for no-such-model:1b (http 404): \
          model 'no-such-model:1b' not found"
+    );
+}
+
+#[test]
+fn loads_a_model_without_generating() {
+    for model in MODELS.into_iter().filter(|model| available(model)) {
+        load(model).unwrap();
+    }
+}
+
+#[test]
+fn loading_an_unknown_model_is_rejected() {
+    if !available(MODELS[0]) {
+        return;
+    }
+    let err = load("no-such-model:1b").unwrap_err();
+    assert!(
+        matches!(err, CleanError::Rejected { status: 404, .. }),
+        "{err:?}"
     );
 }

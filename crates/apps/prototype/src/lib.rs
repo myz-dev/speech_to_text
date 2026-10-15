@@ -1,9 +1,10 @@
 //! Prototype app clearing milestones defined in [PLAN.md](../../../PLAN.md).
 
 use std::io::Write;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::time::Instant;
 
+use anyhow::{Context, bail};
 use clap::{Parser, Subcommand, ValueEnum};
 use cleanup::Language;
 use transcription::Device;
@@ -51,9 +52,10 @@ pub enum Command {
 pub struct SttArgs {
     #[arg(short, long, value_enum, default_value_t = Engine::Whisper)]
     pub engine: Engine,
-    /// Language hint for Whisper (de, en); auto-detect if omitted. Parakeet ignores it
-    #[arg(short, long)]
-    pub language: Option<String>,
+    /// Language spoken. Whisper uses it as a hint and detects the language if it is
+    /// omitted; Parakeet ignores it
+    #[arg(short, long, value_enum)]
+    pub language: Option<Lang>,
     /// Directory containing the model files
     #[arg(long, default_value = "models")]
     pub models: PathBuf,
@@ -63,21 +65,21 @@ pub struct SttArgs {
     pub cpu: bool,
 }
 
-#[derive(Debug, clap::Args)]
-pub struct CleanupArgs {
-    /// Language of the transcript; the cleaned text stays in it
-    #[arg(short, long, value_enum)]
-    pub language: Lang,
-    /// Ollama model for the cleanup
-    #[arg(short, long, default_value = DEFAULT_CLEANUP_MODEL)]
-    pub model: String,
-}
-
-/// A language the cleanup supports, as given on the command line.
+/// A language the prototype supports, as given on the command line.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
 pub enum Lang {
     De,
     En,
+}
+
+impl Lang {
+    /// ISO 639-1 code, as Whisper expects it.
+    pub fn code(self) -> &'static str {
+        match self {
+            Lang::De => "de",
+            Lang::En => "en",
+        }
+    }
 }
 
 impl From<Lang> for Language {
@@ -104,6 +106,58 @@ pub fn run(cli: Cli, out: &mut dyn Write) -> anyhow::Result<()> {
         Command::Run(args) => run::execute(args, out),
         Command::Bench(args) => bench::execute(args, out),
     }
+}
+
+/// Audio dictated between two presses of Enter.
+struct Dictation {
+    /// 16 kHz mono samples.
+    samples: Vec<f32>,
+    /// Seconds from the second Enter until `samples` were ready (converting the device
+    /// audio to 16 kHz). Counts towards the time from stop to text.
+    conversion_secs: f64,
+}
+
+/// Records from the default microphone between two presses of Enter and saves the
+/// recording to `save` if given. Prompts and warnings go to stderr.
+fn record_dictation(save: Option<&Path>) -> anyhow::Result<Dictation> {
+    eprint!("Press Enter to start recording.");
+    wait_for_enter()?;
+    eprint!("Recording, press Enter to stop.");
+    let mut enter = Ok(());
+    let mut stopped_at = Instant::now();
+    let recording = recording::record(|| {
+        enter = wait_for_enter();
+        stopped_at = Instant::now();
+    })?;
+    enter?;
+    let conversion_secs = stopped_at.elapsed().as_secs_f64();
+
+    let audio_secs = duration_secs(&recording.samples);
+    eprintln!("Recorded {audio_secs:.1} s from {}.", recording.device);
+    if recording.overruns > 0 {
+        eprintln!(
+            "warning: the device reported {} overload(s); the audio may have gaps",
+            recording.overruns
+        );
+    }
+    if recording.samples.is_empty() {
+        bail!("no audio recorded");
+    }
+    if let Some(path) = save {
+        recording::save_wav(path, &recording.samples)?;
+    }
+    Ok(Dictation {
+        samples: recording.samples,
+        conversion_secs,
+    })
+}
+
+/// Blocks until a line is read from stdin. At the end of input it returns at once.
+fn wait_for_enter() -> anyhow::Result<()> {
+    std::io::stdin()
+        .read_line(&mut String::new())
+        .context("cannot read from stdin")?;
+    Ok(())
 }
 
 /// A loaded speech model of the engine chosen on the command line.
@@ -139,11 +193,11 @@ struct Transcript {
 fn transcribe_samples(
     model: &mut Model,
     samples: &[f32],
-    language: Option<&str>,
+    language: Option<Lang>,
 ) -> anyhow::Result<Transcript> {
     Ok(match model {
         Model::Whisper(model) => {
-            let transcript = model.transcribe(samples, language)?;
+            let transcript = model.transcribe(samples, language.map(Lang::code))?;
             Transcript {
                 text: transcript.text,
                 language: Some(transcript.language),

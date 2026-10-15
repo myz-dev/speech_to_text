@@ -152,3 +152,33 @@ gemma3:4b and qwen3:4b-instruct (both Q4_K_M), models loaded.
 - Open for M5: gemma3:4b keeps a leading English "Um,"; qwen3:4b-instruct changed
   "auf drei Uhr" to "um drei Uhr" (meaning change) and drops a leading "Also".
 - 0.5–1.3 s per sentence with the model loaded.
+
+## M4: Stop to cleaned text with `stt run`
+
+Setup: `stt run` (release build), German sentences spoken by `say` (voice Anna) through
+the built-in speakers into the built-in microphone; models loaded before recording;
+single runs.
+
+| Engine + LLM | Audio | Transcribe | Clean | Stop to text |
+|---|---:|---:|---:|---:|
+| Parakeet + gemma3:4b | 7.5 s | 0.15 s | 0.81 s | 0.99 s |
+| Whisper + gemma3:4b | 7.5 s | 1.07 s | 0.87 s | 1.97 s |
+| Whisper + qwen3:4b-instruct | 7.6 s | 1.08 s | 0.46 s | 1.57 s |
+| Parakeet + gemma3:4b | 32.1 s | 0.47 s | 1.60 s | 2.13 s |
+| Whisper + gemma3:4b | 32.1 s | 1.96 s | 2.03 s | 4.05 s |
+
+- With 32 s of audio, Parakeet + gemma3:4b meets the < 3 s target; Whisper + gemma3:4b
+  misses it. Cleanup time grows with text length (~70 words: 1.6–2.0 s), because the
+  LLM writes out the whole text.
+- Preloading the LLM before recording keeps its load (0.1–0.3 s warm, ~1.7 s cold)
+  out of the time from stop to text.
+- The cleanup can change meaning while fixing recognition errors: Whisper heard "auf
+  3 Uhr" as "in 3 Uhr", and gemma3:4b turned it into "um 15:00 Uhr". It also fixed
+  "Staging-Söger" to "Staging-Server" correctly.
+- Speaker-to-microphone recordings are too quiet to judge accuracy: one 32 s recording
+  peaked at -23 dBFS with an RMS of -50 dBFS (the `say` file itself: 0 / -18 dBFS).
+  On it Parakeet produced English nonsense and Whisper garbled several phrases; on the
+  `say` file Parakeet made one error ("Buckend"). On poor audio Parakeet, which has no
+  language hint, can switch to English. Accuracy needs real dictation (M5).
+- `say` speech contains no real hesitations: both engines drop "äh"/"ähm" from it
+  themselves, so it does not exercise the cleanup's filler removal.
