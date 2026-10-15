@@ -1,9 +1,10 @@
 //! Prototype app clearing milestones defined in [PLAN.md](../../../PLAN.md).
 
 use std::io::Write;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::time::Instant;
 
+use anyhow::{Context, bail};
 use clap::{Parser, Subcommand, ValueEnum};
 use cleanup::Language;
 use transcription::Device;
@@ -105,6 +106,58 @@ pub fn run(cli: Cli, out: &mut dyn Write) -> anyhow::Result<()> {
         Command::Run(args) => run::execute(args, out),
         Command::Bench(args) => bench::execute(args, out),
     }
+}
+
+/// Audio dictated between two presses of Enter.
+struct Dictation {
+    /// 16 kHz mono samples.
+    samples: Vec<f32>,
+    /// Seconds from the second Enter until `samples` were ready (converting the device
+    /// audio to 16 kHz). Counts towards the time from stop to text.
+    conversion_secs: f64,
+}
+
+/// Records from the default microphone between two presses of Enter and saves the
+/// recording to `save` if given. Prompts and warnings go to stderr.
+fn record_dictation(save: Option<&Path>) -> anyhow::Result<Dictation> {
+    eprint!("Press Enter to start recording.");
+    wait_for_enter()?;
+    eprint!("Recording, press Enter to stop.");
+    let mut enter = Ok(());
+    let mut stopped_at = Instant::now();
+    let recording = recording::record(|| {
+        enter = wait_for_enter();
+        stopped_at = Instant::now();
+    })?;
+    enter?;
+    let conversion_secs = stopped_at.elapsed().as_secs_f64();
+
+    let audio_secs = duration_secs(&recording.samples);
+    eprintln!("Recorded {audio_secs:.1} s from {}.", recording.device);
+    if recording.overruns > 0 {
+        eprintln!(
+            "warning: the device reported {} overload(s); the audio may have gaps",
+            recording.overruns
+        );
+    }
+    if recording.samples.is_empty() {
+        bail!("no audio recorded");
+    }
+    if let Some(path) = save {
+        recording::save_wav(path, &recording.samples)?;
+    }
+    Ok(Dictation {
+        samples: recording.samples,
+        conversion_secs,
+    })
+}
+
+/// Blocks until a line is read from stdin. At the end of input it returns at once.
+fn wait_for_enter() -> anyhow::Result<()> {
+    std::io::stdin()
+        .read_line(&mut String::new())
+        .context("cannot read from stdin")?;
+    Ok(())
 }
 
 /// A loaded speech model of the engine chosen on the command line.
