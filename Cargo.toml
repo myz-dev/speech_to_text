@@ -22,6 +22,9 @@ hound = "3.5.1"
 # Release candidate: its API changes between rc versions, so pin the exact version.
 ort = "=2.0.0-rc.14"
 rubato = "5.0.1"
+serde = { version = "1.0.229", features = ["derive"] }
 tempfile = "3.27.0"
 thiserror = "2.0.21"
+# Ollama is plain HTTP on localhost: no TLS or gzip needed.
+ureq = { version = "3.4.2", default-features = false, features = ["json"] }
 whisper-rs = { version = "0.16.0", features = ["metal"] }
