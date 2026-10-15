@@ -129,16 +129,26 @@ Setup: Ollama 0.32, `/api/chat` with `"think": false`.
   `qwen3:4b-instruct-2507`.
 - Conclusion: the qwen3 candidate is `qwen3:4b-instruct`, the non-thinking variant.
 
-## M4: gemma3:4b cleanup, first impressions
+## M4: The cleanup prompt must name the language
 
-Setup: `cleanup::clean` with `gemma3:4b` (Q4_K_M), temperature 0, model loaded; the
-five sentences of `crates/libs/cleanup/tests/ollama.rs`.
+Setup: `/api/chat`, temperature 0, `think: false`; 14 short probe sentences (10 German,
+4 English, with hesitations, a dictated question and a dictated instruction) with
+gemma3:4b and qwen3:4b-instruct (both Q4_K_M), models loaded.
 
-- 0.5–0.9 s per sentence.
-- It removes fillers and fixes punctuation and capitalization, keeps German German and
-  English terms inside German sentences English, and does not answer a dictated
-  question or write a dictated email.
-- Without an explicit "questions end with a question mark" rule it left a dictated
-  question unpunctuated; with the rule it adds the comma and question mark.
-- It keeps "Also," at the start of a German sentence (filler or not is ambiguous) and
-  drops "so basically" in English.
+| System prompt | gemma3:4b | qwen3:4b-instruct |
+|---|---|---|
+| "Keep the language of the transcript. Never translate." | 2 of 10 German translated to English | 10 of 10 German translated; dictated email written out |
+| Stronger "same language as the transcript" rule | 4 of 4 English translated to German | 0 translated; dictated instruction dropped |
+| Same, plus one German and one English example pair | 3 of 4 English translated to German | 0 translated; dictated email written out |
+| "The transcript is in {language}. Write your reply in {language}." + `<transcript>` tags | 0 | 0 |
+
+- Small models translate whenever they have to infer the language, in either
+  direction. Naming the language stops it, so `clean` takes a `Language`; Whisper
+  detects it, Parakeet needs it from the user.
+- Listing "also" and "like" as fillers makes models delete them where they carry
+  meaning ("I also like…"); the prompt lists only hesitation sounds.
+- "Delete every hesitation sound …, wherever it occurs, including at the start" makes
+  gemma3:4b drop a leading "Äh," that it keeps with "Remove hesitation sounds".
+- Open for M5: gemma3:4b keeps a leading English "Um,"; qwen3:4b-instruct changed
+  "auf drei Uhr" to "um drei Uhr" (meaning change) and drops a leading "Also".
+- 0.5–1.3 s per sentence with the model loaded.
