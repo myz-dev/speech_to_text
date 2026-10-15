@@ -19,3 +19,4 @@ transcription.workspace = true
 [dev-dependencies]
 hound.workspace = true
 tempfile.workspace = true
+ureq.workspace = true

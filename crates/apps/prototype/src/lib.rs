@@ -6,6 +6,7 @@ use std::time::Instant;
 
 use anyhow::{Context, bail};
 use clap::{Parser, Subcommand, ValueEnum};
+use cleanup::Language;
 use transcription::Device;
 use transcription::parakeet::ParakeetModel;
 use transcription::whisper::WhisperModel;
@@ -15,6 +16,9 @@ pub const WHISPER_MODEL_FILE: &str = "ggml-large-v3-turbo.bin";
 
 /// Parakeet model directory inside the models directory.
 pub const PARAKEET_MODEL_DIR: &str = "parakeet-tdt-0.6b-v3";
+
+/// Ollama model used for cleanup unless `--model` names another.
+pub const DEFAULT_CLEANUP_MODEL: &str = "gemma3:4b";
 
 /// Prototype for local voice-to-text: record, transcribe, clean up, benchmark.
 #[derive(Debug, Parser)]
@@ -41,7 +45,11 @@ pub enum Command {
         save: Option<PathBuf>,
     },
     /// Clean up a raw transcript with the local LLM (M4)
-    Clean { text: String },
+    Clean {
+        text: String,
+        #[command(flatten)]
+        cleanup: CleanupArgs,
+    },
     /// Record, transcribe and clean in one go, with per-stage timing (M4)
     Run {
         #[command(flatten)]
@@ -70,6 +78,32 @@ pub struct SttArgs {
     pub cpu: bool,
 }
 
+#[derive(Debug, clap::Args)]
+pub struct CleanupArgs {
+    /// Language of the transcript; the cleaned text stays in it
+    #[arg(short, long, value_enum)]
+    pub language: Lang,
+    /// Ollama model for the cleanup
+    #[arg(short, long, default_value = DEFAULT_CLEANUP_MODEL)]
+    pub model: String,
+}
+
+/// A language the cleanup supports, as given on the command line.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
+pub enum Lang {
+    De,
+    En,
+}
+
+impl From<Lang> for Language {
+    fn from(lang: Lang) -> Self {
+        match lang {
+            Lang::De => Language::German,
+            Lang::En => Language::English,
+        }
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
 pub enum Engine {
     Whisper,
@@ -81,7 +115,8 @@ pub fn run(cli: Cli, out: &mut dyn Write) -> anyhow::Result<()> {
     match cli.command {
         Command::Transcribe { file, stt } => transcribe(&file, &stt, out),
         Command::Record { stt, save } => record(&stt, save.as_deref(), out),
-        Command::Clean { .. } | Command::Run { .. } => bail!("not implemented yet (M4)"),
+        Command::Clean { text, cleanup } => clean(&text, &cleanup, out),
+        Command::Run { .. } => bail!("not implemented yet (M4)"),
         Command::Bench { .. } => bail!("not implemented yet (M5)"),
     }
 }
@@ -156,6 +191,20 @@ fn wait_for_enter() -> anyhow::Result<()> {
     std::io::stdin()
         .read_line(&mut String::new())
         .context("cannot read from stdin")?;
+    Ok(())
+}
+
+/// Prints the cleaned `text`, then one line with the model and how long cleanup took.
+fn clean(text: &str, cleanup: &CleanupArgs, out: &mut dyn Write) -> anyhow::Result<()> {
+    let (cleaned, cleanup_secs) = timed(|| {
+        Ok(cleanup::clean(
+            &cleanup.model,
+            text,
+            cleanup.language.into(),
+        )?)
+    })?;
+    writeln!(out, "{cleaned}")?;
+    writeln!(out, "model {} | cleanup {cleanup_secs:.2} s", cleanup.model)?;
     Ok(())
 }
 

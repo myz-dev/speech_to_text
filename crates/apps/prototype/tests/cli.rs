@@ -1,7 +1,7 @@
 //! Make sure arguments are parsed/used as expected.
 
 use clap::Parser;
-use prototype::{Cli, Command, Engine};
+use prototype::{Cli, Command, DEFAULT_CLEANUP_MODEL, Engine, Lang};
 
 #[test]
 fn transcribe_defaults_to_whisper_without_language() {
@@ -58,6 +58,27 @@ fn record_accepts_save_path() {
         save.as_deref().and_then(|p| p.to_str()),
         Some("fixtures/de/note.wav")
     );
+}
+
+#[test]
+fn clean_requires_a_language() {
+    assert!(Cli::try_parse_from(["stt", "clean", "äh hallo"]).is_err());
+}
+
+#[test]
+fn clean_defaults_to_the_default_model() {
+    let cli = Cli::try_parse_from(["stt", "clean", "äh hallo", "-l", "de"]).unwrap();
+    let Command::Clean { text, cleanup } = cli.command else {
+        panic!("expected clean, got {:?}", cli.command);
+    };
+    assert_eq!(text, "äh hallo");
+    assert_eq!(cleanup.language, Lang::De);
+    assert_eq!(cleanup.model, DEFAULT_CLEANUP_MODEL);
+}
+
+#[test]
+fn clean_rejects_unsupported_language() {
+    assert!(Cli::try_parse_from(["stt", "clean", "bonjour", "-l", "fr"]).is_err());
 }
 
 #[test]
