@@ -51,6 +51,7 @@ pub struct Recording {
     pub device: String,
     /// How often the device reported an overload while recording. Each one may have
     /// left a gap in the audio.
+    ///
     /// macOS reports overloads for the whole device, not per stream, e.g. when the
     /// stream starts while the microphone permission dialog is open.
     pub overruns: usize,
@@ -153,8 +154,10 @@ where
 /// Whether a stream error ends the recording.
 ///
 /// Recoverable, the recording continues:
-/// - `DeviceChanged`: the default device was rerouted, e.g. to headphones that were just
-///   plugged in, and the stream keeps recording from the new device.
+/// - `DeviceChanged`: the default device was rerouted. cpal documents that the stream
+///   stays active on backends that reroute. On macOS input streams never reroute: they
+///   keep recording from the device they started with, even if a newly plugged-in
+///   headset becomes the default, and no error is raised.
 /// - `RealtimeDenied`: the audio thread runs without real-time priority. It only risks
 ///   glitches, and those are reported as `Xrun` themselves.
 /// - `Xrun`: a device overload that may have left a short gap in the audio. Counted in
