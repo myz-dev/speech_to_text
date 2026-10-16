@@ -222,3 +222,37 @@ cleanup's failure modes are answered; accuracy on real dictation is not.
 Ollama, both loaded at startup, an explicit de/en setting, and the raw transcript kept
 alongside the cleaned text. The app should be able to save dictations as fixtures, so
 accuracy is measured on real use.
+
+## App: silence detection on the built-in microphone
+
+Setup: `stt record --auto-stop -l de` (release build, Whisper), built-in MacBook Pro
+microphone (48 kHz), quiet room, default `silence::Params`. One take per case, spoken
+by a person. Levels are 30 ms RMS in dBFS.
+
+| Take | Content                          | Stop                     | Result                         |
+|------|----------------------------------|--------------------------|--------------------------------|
+| 1    | one sentence                     | speech ended, 1.2 s late | exact transcript, 3.7 of 5.3 s kept |
+| 2    | sentence, ~1 s pause, sentence   | speech ended, 1.2 s late | one transcript, pause bridged  |
+| 3    | silence, distant music at the end | no speech after 10 s    | not transcribed                |
+| 4, 5 | typing only                      | no speech after 10 s     | not transcribed                |
+| 6    | heavy typing and a cough         | speech ended at 24.6 s   | transcribed (false positive)   |
+
+- **Levels:** room -71 to -65 dBFS, speech peaks -36 to -32, music -61, typing up to
+  -45, a cough -37 to -27. In a quiet room the start threshold sits at its lower limit
+  (`min_start_db`, -55 dBFS); speech clears it by about 20 dB.
+- **Whether there is speech must come from the live detector.** Its noise floor follows
+  steady noise: during typing it rose to -58 dBFS (threshold -46) and never started.
+  The quietest window of the whole recording stays at -70 dBFS (threshold -55); against
+  it, fast typing makes runs of 3–5 loud frames, which count as speech, and Whisper
+  turned them into "Vielen Dank." The trimming uses the whole-recording floor only to
+  place the start and end of speech the live detector heard.
+- **A cough is speech to an energy detector:** 300 ms at -37 to -27 dBFS, like a
+  syllable. Telling them apart needs a speech classifier (VAD model).
+- **Steady loud noise keeps a recording open.** After speech started, keystrokes above
+  the end threshold (start − 6 dB) reset the 1.2 s hangover; take 6 ran until the
+  typing stopped. It costs time, not words.
+- **The microphone starts with digital silence:** one faint frame, then 90–120 ms of
+  exact zeros, then the room. Noise floor windows that contain digital silence must be
+  skipped, or the floor drops to -100 dBFS.
+- Auto-stop adds the 1.2 s hangover to the time from the last word to text; stop to
+  text itself was 0.57 s with Whisper.
