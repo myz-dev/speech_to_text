@@ -8,4 +8,9 @@ publish.workspace = true
 tauri-build.workspace = true
 
 [dependencies]
+anyhow.workspace = true
+recording.workspace = true
+serde.workspace = true
 tauri = { workspace = true, features = ["tray-icon"] }
+tauri-plugin-global-shortcut.workspace = true
+transcription.workspace = true

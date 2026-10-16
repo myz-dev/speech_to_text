@@ -29,6 +29,7 @@ serde = { version = "1.0.229", features = ["derive"] }
 # Tauri 3 alphas are on crates.io; these requirements keep cargo on 2.x.
 tauri = "2.12"
 tauri-build = "2.7"
+tauri-plugin-global-shortcut = "2.4"
 tempfile = "3.27.0"
 thiserror = "2.0.21"
 # Ollama is plain HTTP on localhost: no TLS or gzip needed.
