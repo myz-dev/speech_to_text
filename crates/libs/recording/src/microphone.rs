@@ -560,6 +560,13 @@ mod tests {
     }
 
     #[test]
+    fn finish_rejects_digital_silence() {
+        let captured = streamed(vec![0.0; 480], false);
+        let result = finish("mic".to_owned(), captured, RATE, &Params::default());
+        assert!(matches!(result, Err(RecordError::Silent { .. })));
+    }
+
+    #[test]
     fn finish_counts_overruns_in_a_good_recording() {
         let mut captured = streamed(vec![0.1; 480], false);
         captured.errors.push(ErrorKind::Xrun.into());
