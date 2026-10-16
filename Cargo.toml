@@ -1,6 +1,9 @@
 [workspace]
 resolver = "3"
 members = ["crates/apps/*", "crates/libs/*"]
+# Root commands (build, test, run) cover the app and the libraries. The `stt` prototype
+# is built only on request: `-p prototype`.
+default-members = ["crates/apps/dictate", "crates/libs/*"]
 
 [workspace.package]
 version = "0.1.0"
@@ -23,8 +26,22 @@ hound = "3.5.1"
 ort = "=2.0.0-rc.14"
 rubato = "5.0.1"
 serde = { version = "1.0.229", features = ["derive"] }
+# Tauri 3 alphas are on crates.io; these requirements keep cargo on 2.x.
+tauri = "2.12"
+tauri-build = "2.7"
 tempfile = "3.27.0"
 thiserror = "2.0.21"
 # Ollama is plain HTTP on localhost: no TLS or gzip needed.
 ureq = { version = "3.4.2", default-features = false, features = ["json"] }
 whisper-rs = { version = "0.16.0", features = ["metal"] }
+
+# whisper.cpp (ggml) and the resampler are unusably slow unoptimized, which would make
+# debug builds (`cargo tauri dev`) misleading. Our own code stays at opt-level 0.
+[profile.dev.package.whisper-rs-sys]
+opt-level = 3
+
+[profile.dev.package.rubato]
+opt-level = 3
+
+[profile.dev.package.realfft]
+opt-level = 3
