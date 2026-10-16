@@ -5,6 +5,7 @@
 //! Settings → Privacy & Security → Accessibility). In `cargo tauri dev` macOS asks
 //! for it on behalf of the terminal that started the app.
 
+use std::process::Command;
 use std::thread;
 use std::time::Duration;
 
@@ -42,12 +43,15 @@ pub fn paste(text: &str) -> anyhow::Result<()> {
         .context("cannot put the text on the clipboard")?;
 
     if !CGPreflightPostEventAccess() {
-        // Shows the system prompt once and lists the app in the Accessibility
-        // settings; the permission applies from the next paste on.
+        // Lists the app in the Accessibility settings and shows the system prompt,
+        // but only the first time: after a denial, macOS stays silent. Opening the
+        // settings page covers that case; the permission applies from the next paste on.
         CGRequestPostEventAccess();
+        open_accessibility_settings();
         bail!(
-            "pasting needs the Accessibility permission (System Settings → Privacy & \
-             Security → Accessibility); the text is on the clipboard, paste it with ⌘V"
+            "pasting needs the Accessibility permission: switch it on in the opened \
+             System Settings page (Privacy & Security → Accessibility); the text is on \
+             the clipboard, paste it with ⌘V"
         );
     }
 
@@ -59,6 +63,15 @@ pub fn paste(text: &str) -> anyhow::Result<()> {
             .context("cannot restore the previous clipboard text")?;
     }
     Ok(())
+}
+
+/// Opens System Settings at Privacy & Security → Accessibility. Failing to open it is
+/// only logged: the error message names the page anyway.
+fn open_accessibility_settings() {
+    let page = "x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility";
+    if let Err(error) = Command::new("open").arg(page).spawn() {
+        eprintln!("cannot open the Accessibility settings: {error}");
+    }
 }
 
 /// Posts ⌘V key-down and key-up events, as the keyboard would.
