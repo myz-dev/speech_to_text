@@ -34,10 +34,11 @@ claims above independently; do not assume they hold."*
 ## Principles
 - Simple over clever. Code is read far more often than written; optimize for a reader
   scanning it once.
-- Prefer free functions whose arguments carry all relevant state. Structs hold data or
+- Write idiomatic Rust: code should not surprise a Rust developer. Structs hold data or
   expensive resources (a loaded model), not behavior hierarchies.
-- Methods on such structs are fine when they take `&self` and every other input is an
-  argument; avoid `&mut self` methods that carry hidden state from one call to the next.
+- Constructors (`Type::new`, `Type::open`, `TryFrom`) and `&self` methods are welcome.
+- Avoid `&mut self` methods whose effect depends on state left behind by earlier
+  calls; pass that state in and return it instead (like `silence::step`).
 - No factories, builders-for-the-sake-of-it, or layers of indirection. A code path
   should be followable with "go to definition".
 
