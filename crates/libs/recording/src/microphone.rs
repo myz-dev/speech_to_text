@@ -58,9 +58,8 @@ pub struct Recording {
     /// macOS reports overloads for the whole device, not per stream, e.g. when the
     /// stream starts while the microphone permission dialog is open.
     pub overruns: usize,
-    /// Range of `samples` to transcribe: from the first to the last speech, padded, or
-    /// the whole recording if the speech cannot be located. `None` if the recording
-    /// holds no speech, e.g. only silence or typing.
+    /// Range of `samples` to transcribe: from the first to the last speech, padded.
+    /// `None` if the recording holds no speech, e.g. only silence or typing.
     pub speech: Option<Range<usize>>,
 }
 
@@ -97,14 +96,17 @@ pub fn record(params: &Params, wait: impl FnOnce()) -> Result<Recording, RecordE
     let errors: Vec<cpal::Error> = input.errors.try_iter().collect();
     let interleaved: Vec<f32> = input.samples.try_iter().flatten().collect();
     let mono = to_mono(interleaved, input.channels);
-    let detector = mono
-        .chunks_exact(silence::frame_len(input.sample_rate))
-        .fold(Detector::default(), |detector, frame| {
-            silence::analyse(detector, frame, params).0
-        });
+    let mut detector = Detector::default();
+    let mut levels = Vec::new();
+    for chunk in mono.chunks_exact(silence::frame_len(input.sample_rate)) {
+        let frame;
+        (detector, frame) = silence::analyse(detector, chunk, params);
+        levels.push(frame.level_db);
+    }
     let streamed = Streamed {
         mono,
         errors,
+        levels,
         heard_speech: detector.heard_speech(),
     };
     finish(input.device, streamed, input.sample_rate, params)
@@ -207,6 +209,9 @@ struct Streamed {
     /// The recording, mono at the device's native rate.
     mono: Vec<f32>,
     errors: Vec<cpal::Error>,
+    /// Level of every measured 30 ms frame of `mono`, in dBFS. Audio after the last
+    /// whole frame, or received after the stop, is not measured.
+    levels: Vec<f32>,
     /// Whether the live speech detector reported speech.
     heard_speech: bool,
 }
@@ -231,6 +236,7 @@ fn stream_mono(
     // Samples of `mono` already measured; the rest is less than a frame.
     let mut measured = 0;
     let mut frames = Vec::new();
+    let mut levels = Vec::new();
     loop {
         seen_errors.extend(errors.try_iter());
         if seen_errors.iter().any(is_fatal) {
@@ -252,6 +258,7 @@ fn stream_mono(
             let frame;
             (detector, frame) = silence::analyse(detector, chunk, params);
             frames.push(frame);
+            levels.push(frame.level_db);
         }
         measured += frames.len() * frame_len;
         if on_frames(&frames) == Flow::Stop {
@@ -261,6 +268,7 @@ fn stream_mono(
     Streamed {
         mono,
         errors: seen_errors,
+        levels,
         heard_speech: detector.heard_speech(),
     }
 }
@@ -275,6 +283,7 @@ fn finish(
     let Streamed {
         mono,
         errors,
+        levels,
         heard_speech,
     } = streamed;
     if let Some(source) = errors.iter().find(|error| is_fatal(error)) {
@@ -289,21 +298,30 @@ fn finish(
     let samples = resample(mono, sample_rate, SAMPLE_RATE).map_err(RecordError::Resample)?;
     // The live detector decides whether there is speech: its noise floor follows steady
     // noise such as typing, which `speech_span`, measuring against the quietest part of
-    // the recording, can mistake for speech. `speech_span` only trims. It cuts frames
-    // at other points than the live detector, at 16 kHz instead of the native rate, so a
-    // burst that just reached `start_frames` live can fall short there; keep everything
-    // then rather than lose the speech.
-    let speech = if heard_speech {
-        silence::speech_span(&samples, SAMPLE_RATE, params).or(Some(0..samples.len()))
+    // the recording, can mistake for speech. `speech_span` only trims, on the same
+    // levels, so it finds a span whenever the live detector heard speech.
+    let speech_frames = if heard_speech {
+        silence::speech_span(&levels, params)
     } else {
         None
     };
+    let to_sample = |frame| frame_start_at_16k(frame, sample_rate).min(samples.len());
+    let speech = speech_frames.map(|frames| to_sample(frames.start)..to_sample(frames.end));
     Ok(Recording {
         samples,
         device,
         overruns: count_overruns(&errors),
         speech,
     })
+}
+
+/// The 16 kHz sample at which frame `frame`, measured at `sample_rate`, starts.
+///
+/// The frame starts at native sample `frame * frame_len`. A frame is not exactly 30 ms
+/// at every rate (661 samples, 29.98 ms, at 22.05 kHz), so the time comes from the
+/// native samples; `frame * 30 ms` would drift by 0.75 ms per second of recording.
+fn frame_start_at_16k(frame: usize, sample_rate: u32) -> usize {
+    frame * silence::frame_len(sample_rate) * SAMPLE_RATE as usize / sample_rate as usize
 }
 
 /// Opens an input stream that sends each buffer, converted to `f32`, to `samples`.
@@ -467,6 +485,14 @@ mod tests {
     }
 
     #[test]
+    fn stream_keeps_the_level_of_every_frame() {
+        let buffers = vec![level(-20.0, 20); 4];
+        let streamed = stream(&buffers, &[], 1, stop_after(4));
+        // 80 samples: two whole frames of 30, the rest is not measured.
+        assert_eq!(streamed.levels.len(), 2);
+    }
+
+    #[test]
     fn stream_without_loud_frames_hears_no_speech() {
         let buffers = vec![level(-70.0, FRAME_LEN); 10];
         let streamed = stream(&buffers, &[], 1, stop_after(10));
@@ -542,11 +568,16 @@ mod tests {
         assert_eq!(streamed.mono.len(), 1_500);
     }
 
-    /// Captured audio for `finish`, without stream errors.
+    /// Captured audio for `finish`, measured in frames, without stream errors.
     fn streamed(mono: Vec<f32>, heard_speech: bool) -> Streamed {
+        let levels = mono
+            .chunks_exact(silence::frame_len(RATE))
+            .map(silence::level_db)
+            .collect();
         Streamed {
             mono,
             errors: Vec::new(),
+            levels,
             heard_speech,
         }
     }
@@ -594,10 +625,11 @@ mod tests {
     }
 
     #[test]
-    fn finish_keeps_everything_when_only_the_live_detector_heard_speech() {
-        let captured = streamed(level(-70.0, RATE as usize), true);
-        let recording = finish("mic".to_owned(), captured, RATE, &Params::default()).unwrap();
-        assert_eq!(recording.speech, Some(0..recording.samples.len()));
+    fn frame_start_follows_the_native_frame_length() {
+        // 48 kHz: 1440 samples per frame, exactly 30 ms, 480 samples at 16 kHz.
+        assert_eq!(frame_start_at_16k(10_000, 48_000), 4_800_000);
+        // 22.05 kHz: 661 samples per frame; 10_000 frames are 299.77 s, not 300 s.
+        assert_eq!(frame_start_at_16k(10_000, 22_050), 4_796_371);
     }
 
     #[test]

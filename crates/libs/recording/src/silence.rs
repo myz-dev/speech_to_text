@@ -6,9 +6,10 @@
 //!   past, so it estimates the noise floor as it goes. Whether it heard speech at all
 //!   decides whether a recording holds speech: its floor follows steady noise such as
 //!   typing.
-//! - `speech_span` runs on a finished recording and finds the range from the first to
-//!   the last speech, for trimming ([`crate::Recording::speech`]). It sees the whole
-//!   recording, so the quietest window (below) is its noise floor.
+//! - `speech_span` runs on the levels of a finished recording and finds the frames from
+//!   the first to the last speech, for trimming ([`crate::Recording::speech`]). It sees
+//!   the whole recording, so the quietest window (below) is its noise floor; the live
+//!   floor is never lower, so `speech_span` finds speech wherever `step` started it.
 //!
 //! Both take the noise floor from windows of [`FLOOR_FRAMES`] frames: the loudest frame
 //! of a window is its level, and windows holding digital silence ([`MIN_DB`]) are
@@ -254,32 +255,21 @@ pub(crate) fn analyse(detector: Detector, samples: &[f32], params: &Params) -> (
     (detector, frame)
 }
 
-/// Range of `samples` from the first to the last speech, padded by
-/// [`Params::pad_before_frames`] and [`Params::pad_after_frames`]. `None` if nothing in
-/// the recording counts as speech.
-///
-/// `samples` is mono at `sample_rate`.
+/// Frames from the first to the last speech in `levels` (one per frame, in dBFS),
+/// padded by [`Params::pad_before_frames`] and [`Params::pad_after_frames`]. `None` if
+/// nothing counts as speech. The end can lie past the last level: the padding may reach
+/// into audio after the last whole frame.
 ///
 /// The noise floor is the quietest window of the recording. An unusually quiet window
 /// lowers the threshold, which keeps more audio: errors cost speed, not words.
-///
-/// # Panics
-/// If `sample_rate` is below 34 Hz, where a frame has no samples.
-pub(crate) fn speech_span(
-    samples: &[f32],
-    sample_rate: u32,
-    params: &Params,
-) -> Option<Range<usize>> {
-    let frame_len = frame_len(sample_rate);
-    let levels: Vec<f32> = samples.chunks(frame_len).map(level_db).collect();
+pub(crate) fn speech_span(levels: &[f32], params: &Params) -> Option<Range<usize>> {
     let floor_db = levels
         .windows(FLOOR_FRAMES)
         .filter_map(window_floor_db)
         .fold(f32::INFINITY, f32::min);
     let start_db = start_threshold_db(floor_db, params);
 
-    // Frame ranges of the first and last speech: runs of at least `start_frames` loud
-    // frames.
+    // The first and last speech: runs of at least `start_frames` loud frames.
     let mut first: Option<usize> = None;
     let mut last_end = 0;
     let mut loud_run = 0;
@@ -291,9 +281,8 @@ pub(crate) fn speech_span(
         }
     }
 
-    let start_frame = first?.saturating_sub(params.pad_before_frames as usize);
-    let end_frame = last_end + params.pad_after_frames as usize;
-    Some(start_frame * frame_len..(end_frame * frame_len).min(samples.len()))
+    let start = first?.saturating_sub(params.pad_before_frames as usize);
+    Some(start..last_end + params.pad_after_frames as usize)
 }
 
 #[cfg(test)]
@@ -554,6 +543,19 @@ mod tests {
         assert_eq!(kinds(&found), [Event::SpeechStarted, Event::SpeechEnded]);
     }
 
+    /// Level of every whole frame of `samples`, as recording measures them.
+    fn levels(samples: &[f32], rate: u32) -> Vec<f32> {
+        samples
+            .chunks_exact(frame_len(rate))
+            .map(level_db)
+            .collect()
+    }
+
+    /// Start of `frame` in milliseconds.
+    fn ms(frame: usize) -> u32 {
+        frame as u32 * FRAME_MS
+    }
+
     #[test]
     fn speech_span_covers_the_speech_with_padding() {
         let samples = [
@@ -562,11 +564,10 @@ mod tests {
             noise(-60.0, 2.0, RATE),
         ]
         .concat();
-        let span = speech_span(&samples, RATE, &Params::default()).unwrap();
-        let frame = frame_len(RATE);
-        // Speech is 16_000..32_000; 8 frames of padding before, 13 after.
-        assert!(span.start.abs_diff(16_000 - 8 * frame) <= frame, "{span:?}");
-        assert!(span.end.abs_diff(32_000 + 13 * frame) <= frame, "{span:?}");
+        let span = speech_span(&levels(&samples, RATE), &Params::default()).unwrap();
+        // Speech is 1000..2000 ms; 240 ms of padding before, 390 ms after.
+        assert!(ms(span.start).abs_diff(760) <= FRAME_MS, "{span:?}");
+        assert!(ms(span.end).abs_diff(2_390) <= FRAME_MS, "{span:?}");
     }
 
     #[test]
@@ -579,15 +580,16 @@ mod tests {
             noise(-60.0, 1.0, RATE),
         ]
         .concat();
-        let span = speech_span(&samples, RATE, &Params::default()).unwrap();
-        assert!(span.start < 16_000 && span.end > 96_000, "{span:?}");
+        let span = speech_span(&levels(&samples, RATE), &Params::default()).unwrap();
+        assert!(ms(span.start) < 1_000 && ms(span.end) > 6_000, "{span:?}");
     }
 
     #[test]
     fn speech_span_keeps_a_recording_that_is_speech_throughout() {
-        let samples = tone(-20.0, 1.0, RATE);
-        let span = speech_span(&samples, RATE, &Params::default()).unwrap();
-        assert_eq!(span, 0..samples.len());
+        let levels = levels(&tone(-20.0, 1.0, RATE), RATE);
+        let span = speech_span(&levels, &Params::default()).unwrap();
+        assert_eq!(span.start, 0);
+        assert!(span.end >= levels.len(), "{span:?}");
     }
 
     #[test]
@@ -599,21 +601,21 @@ mod tests {
             noise(-60.0, 1.0, RATE),
         ]
         .concat();
-        assert_eq!(speech_span(&noise(-60.0, 2.0, RATE), RATE, &params), None);
-        assert_eq!(speech_span(&click, RATE, &params), None);
-        assert_eq!(speech_span(&[], RATE, &params), None);
+        assert_eq!(
+            speech_span(&levels(&noise(-60.0, 2.0, RATE), RATE), &params),
+            None
+        );
+        assert_eq!(speech_span(&levels(&click, RATE), &params), None);
+        assert_eq!(speech_span(&[], &params), None);
     }
 
     #[test]
-    fn speech_span_ignores_digital_silence_and_a_short_last_frame() {
-        let params = Params::default();
-        let mut samples = fan_with_digital_silence(RATE);
-        // Whole frames, then 2 samples at -60 dBFS as the last chunk: quieter than the
-        // fan, but not digital silence, so only the window keeps them from becoming the
-        // floor.
-        samples.truncate(samples.len() / frame_len(RATE) * frame_len(RATE));
-        samples.extend([1e-3, -1e-3]);
-        assert_eq!(speech_span(&samples, RATE, &params), None);
+    fn speech_span_ignores_digital_silence_and_a_single_quiet_frame() {
+        let mut levels = levels(&fan_with_digital_silence(RATE), RATE);
+        // One frame at -60 dBFS: quieter than the fan, but not digital silence, so only
+        // the window keeps it from becoming the floor.
+        levels.push(-60.0);
+        assert_eq!(speech_span(&levels, &Params::default()), None);
     }
 
     #[test]
@@ -625,10 +627,46 @@ mod tests {
             noise(-60.0, 2.0, rate),
         ]
         .concat();
-        let span = speech_span(&samples, rate, &Params::default()).unwrap();
-        let ms = |sample: usize| sample as u32 * 1_000 / rate;
-        // Speech is 1000..2000 ms; 240 ms of padding before, 390 ms after.
+        let span = speech_span(&levels(&samples, rate), &Params::default()).unwrap();
         assert!(ms(span.start).abs_diff(760) <= FRAME_MS, "{span:?}");
         assert!(ms(span.end).abs_diff(2_390) <= FRAME_MS, "{span:?}");
+    }
+
+    #[test]
+    fn speech_span_finds_speech_wherever_the_live_detector_started_it() {
+        let params = Params::default();
+        let quiet = |frames| vec![-60.0; frames];
+        let loud = |db, frames| vec![db; frames];
+        let pad = params.pad_before_frames as usize;
+        // Each case with the frame where its speech starts.
+        let cases: [(Vec<f32>, usize); 3] = [
+            // Speech at -32 dBFS from the first frame: below the live threshold before
+            // the first pause (-28 dBFS), so the live detector starts at the second
+            // burst. The threshold from the whole recording (-48 dBFS) keeps the first.
+            (
+                [loud(-32.0, 30), quiet(20), loud(-32.0, 30), quiet(50)].concat(),
+                0,
+            ),
+            // A burst of exactly `start_frames` loud frames.
+            ([quiet(40), loud(-20.0, 3), quiet(40)].concat(), 40),
+            // Speech over a loud background with digital silence in it.
+            (
+                {
+                    let mut levels = levels(&fan_with_digital_silence(RATE), RATE);
+                    levels[200..240].fill(-20.0);
+                    levels
+                },
+                200,
+            ),
+        ];
+        for (levels, speech_start) in cases {
+            let mut detector = Detector::default();
+            for &level in &levels {
+                detector = step(detector, level, &params).0;
+            }
+            assert!(detector.heard_speech(), "{levels:?}");
+            let span = speech_span(&levels, &params).expect("a speech span");
+            assert_eq!(span.start, speech_start.saturating_sub(pad), "{levels:?}");
+        }
     }
 }
