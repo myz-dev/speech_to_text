@@ -7,6 +7,7 @@ use std::time::Instant;
 use anyhow::{Context, bail};
 use clap::{Parser, Subcommand, ValueEnum};
 use cleanup::Language;
+use recording::Recording;
 use recording::silence::Params;
 use transcription::{Device, Model, Transcript};
 
@@ -136,6 +137,16 @@ fn record_dictation(save: Option<&Path>) -> anyhow::Result<Dictation> {
     enter?;
     let conversion_secs = stopped_at.elapsed().as_secs_f64();
 
+    check_recording(&recording, save)?;
+    Ok(Dictation {
+        samples: recording.samples,
+        conversion_secs,
+    })
+}
+
+/// Reports the length and overloads of `recording`, rejects an empty one and saves it
+/// to `save` if given.
+fn check_recording(recording: &Recording, save: Option<&Path>) -> anyhow::Result<()> {
     let audio_secs = duration_secs(&recording.samples);
     eprintln!("Recorded {audio_secs:.1} s from {}.", recording.device);
     if recording.overruns > 0 {
@@ -150,10 +161,7 @@ fn record_dictation(save: Option<&Path>) -> anyhow::Result<Dictation> {
     if let Some(path) = save {
         recording::save_wav(path, &recording.samples)?;
     }
-    Ok(Dictation {
-        samples: recording.samples,
-        conversion_secs,
-    })
+    Ok(())
 }
 
 /// Blocks until a line is read from stdin. At the end of input it returns at once.
