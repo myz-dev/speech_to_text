@@ -7,6 +7,7 @@ use std::time::Instant;
 use anyhow::{Context, bail};
 use clap::{Parser, Subcommand, ValueEnum};
 use cleanup::Language;
+use recording::silence::Params;
 use transcription::{Device, Model, Transcript};
 
 pub mod bench;
@@ -128,7 +129,7 @@ fn record_dictation(save: Option<&Path>) -> anyhow::Result<Dictation> {
     eprint!("Recording, press Enter to stop.");
     let mut enter = Ok(());
     let mut stopped_at = Instant::now();
-    let recording = recording::record(|| {
+    let recording = recording::record(&Params::default(), || {
         enter = wait_for_enter();
         stopped_at = Instant::now();
     })?;

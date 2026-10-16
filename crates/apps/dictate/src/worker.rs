@@ -8,6 +8,7 @@ use std::thread;
 use std::time::Instant;
 
 use anyhow::Context;
+use recording::silence::Params;
 use tauri::{AppHandle, Manager};
 use transcription::{Device, Engine, Model};
 
@@ -84,7 +85,7 @@ fn missing_model_hint(models: &Path) -> String {
 fn dictate(app: &AppHandle, model: &mut Model, commands: &Receiver<Command>) -> anyhow::Result<()> {
     status::publish(app, Status::Recording);
     let mut stopped_at = Instant::now();
-    let recording = recording::record(|| {
+    let recording = recording::record(&Params::default(), || {
         wait_for_key_up(commands);
         stopped_at = Instant::now();
     })?;

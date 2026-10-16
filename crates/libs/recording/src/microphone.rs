@@ -1,3 +1,4 @@
+use std::ops::Range;
 use std::sync::mpsc::{self, Receiver, RecvTimeoutError, Sender};
 use std::time::Duration;
 
@@ -6,6 +7,7 @@ use cpal::{Device, ErrorKind, FromSample, SampleFormat, SizedSample, Stream, Str
 
 use crate::SAMPLE_RATE;
 use crate::convert::{ResampleError, resample, to_mono};
+use crate::silence::{self, Detector, Frame, Params};
 
 #[derive(Debug, thiserror::Error)]
 pub enum RecordError {
@@ -56,6 +58,10 @@ pub struct Recording {
     /// macOS reports overloads for the whole device, not per stream, e.g. when the
     /// stream starts while the microphone permission dialog is open.
     pub overruns: usize,
+    /// Range of `samples` to transcribe: from the first to the last speech, padded, or
+    /// the whole recording if the speech cannot be located. `None` if the recording
+    /// holds no speech, e.g. only silence or typing.
+    pub speech: Option<Range<usize>>,
 }
 
 /// Whether [`record_streaming`] keeps recording, returned by its callback.
@@ -75,12 +81,13 @@ const SILENT_LIMIT_SECS: usize = 1;
 ///
 /// `wait` runs on the calling thread while the device captures audio on its own thread,
 /// e.g. a closure that blocks until the user presses Enter. The device's native format
-/// is converted to 16 kHz mono afterwards.
+/// is converted to 16 kHz mono afterwards. Speech is detected with `params` as in
+/// [`record_streaming`], after the recording instead of during it.
 ///
 /// macOS does not report a denied microphone permission as an error; the device then
 /// delivers exact zeros. A recording that consists only of zeros is therefore rejected
 /// as [`RecordError::Silent`]. A real microphone always picks up some noise.
-pub fn record(wait: impl FnOnce()) -> Result<Recording, RecordError> {
+pub fn record(params: &Params, wait: impl FnOnce()) -> Result<Recording, RecordError> {
     let input = Input::open()?;
     wait();
     // After the drop no callback runs anymore, so the channels hold all captured audio.
@@ -90,39 +97,52 @@ pub fn record(wait: impl FnOnce()) -> Result<Recording, RecordError> {
     let errors: Vec<cpal::Error> = input.errors.try_iter().collect();
     let interleaved: Vec<f32> = input.samples.try_iter().flatten().collect();
     let mono = to_mono(interleaved, input.channels);
-    finish(input.device, mono, input.sample_rate, &errors)
+    let detector = mono
+        .chunks_exact(silence::frame_len(input.sample_rate))
+        .fold(Detector::default(), |detector, frame| {
+            silence::analyse(detector, frame, params).0
+        });
+    let streamed = Streamed {
+        mono,
+        errors,
+        heard_speech: detector.heard_speech(),
+    };
+    finish(input.device, streamed, input.sample_rate, params)
 }
 
-/// Records from the default input device and hands the audio to `on_audio` as it
-/// arrives, until `on_audio` returns [`Flow::Stop`].
+/// Records from the default input device, measuring it in 30 ms frames as it arrives,
+/// until `on_frames` returns [`Flow::Stop`].
 ///
-/// `on_audio` runs on the calling thread with the new mono samples at the device's
-/// native rate, and that rate. It is called at least every 20 ms, with an empty slice
-/// when no audio arrived, so it can stop on other events too. The whole recording is
-/// converted to 16 kHz once, after the stop.
+/// `on_frames` runs on the calling thread with the frames completed since its last
+/// call: their level, the speech threshold and noise floor, and the speech detector's
+/// events (see [`silence`]). It is called at least every 20 ms, with no frames when no
+/// audio arrived, so it can stop on other events too. The whole recording is converted
+/// to 16 kHz once, after the stop.
 ///
 /// Like [`record`], a recording of only zeros is [`RecordError::Silent`]; here the
-/// recording stops after a second of them instead of waiting for `on_audio`. If
-/// `on_audio` stops before the first buffer arrives, the recording is empty.
+/// recording stops after a second of them instead of waiting for `on_frames`. If
+/// `on_frames` stops before the first buffer arrives, the recording is empty.
 pub fn record_streaming(
-    on_audio: impl FnMut(&[f32], u32) -> Flow,
+    params: &Params,
+    on_frames: impl FnMut(&[Frame]) -> Flow,
 ) -> Result<Recording, RecordError> {
     let input = Input::open()?;
-    let (mut mono, mut errors) = stream_mono(
+    let mut streamed = stream_mono(
         &input.samples,
         &input.errors,
         input.channels,
         input.sample_rate,
-        on_audio,
+        params,
+        on_frames,
     );
     drop(input.stream);
 
     // Audio captured between the stop and the drop belongs to the recording too.
     for buffer in input.samples.try_iter() {
-        mono.extend(to_mono(buffer, input.channels));
+        streamed.mono.extend(to_mono(buffer, input.channels));
     }
-    errors.extend(input.errors.try_iter());
-    finish(input.device, mono, input.sample_rate, &errors)
+    streamed.errors.extend(input.errors.try_iter());
+    finish(input.device, streamed, input.sample_rate, params)
 }
 
 /// The default input device, started and capturing into two channels: one for buffers
@@ -182,20 +202,35 @@ impl Input {
     }
 }
 
-/// Receives buffers, downmixes each to mono and passes it to `on_audio`, until
-/// `on_audio` stops, a fatal stream error arrives, the senders are gone, or a second of
-/// exact zeros has arrived. Returns the mono audio and the errors seen.
+/// What [`stream_mono`] captured.
+struct Streamed {
+    /// The recording, mono at the device's native rate.
+    mono: Vec<f32>,
+    errors: Vec<cpal::Error>,
+    /// Whether the live speech detector reported speech.
+    heard_speech: bool,
+}
+
+/// Receives buffers, downmixes each to mono, measures every completed 30 ms frame and
+/// passes the new frames to `on_frames`, until `on_frames` stops, a fatal stream error
+/// arrives, the senders are gone, or a second of exact zeros has arrived.
 fn stream_mono(
     samples: &Receiver<Vec<f32>>,
     errors: &Receiver<cpal::Error>,
     channels: usize,
     sample_rate: u32,
-    mut on_audio: impl FnMut(&[f32], u32) -> Flow,
-) -> (Vec<f32>, Vec<cpal::Error>) {
+    params: &Params,
+    mut on_frames: impl FnMut(&[Frame]) -> Flow,
+) -> Streamed {
     let silent_limit = sample_rate as usize * SILENT_LIMIT_SECS;
+    let frame_len = silence::frame_len(sample_rate);
     let mut mono = Vec::new();
     let mut seen_errors = Vec::new();
     let mut heard_signal = false;
+    let mut detector = Detector::default();
+    // Samples of `mono` already measured; the rest is less than a frame.
+    let mut measured = 0;
+    let mut frames = Vec::new();
     loop {
         seen_errors.extend(errors.try_iter());
         if seen_errors.iter().any(is_fatal) {
@@ -207,25 +242,41 @@ fn stream_mono(
             Err(RecvTimeoutError::Disconnected) => break,
         };
         heard_signal = heard_signal || new.iter().any(|&sample| sample != 0.0);
-        let start = mono.len();
         mono.extend(new);
         if !heard_signal && mono.len() >= silent_limit {
             break;
         }
-        if on_audio(&mono[start..], sample_rate) == Flow::Stop {
+
+        frames.clear();
+        for chunk in mono[measured..].chunks_exact(frame_len) {
+            let frame;
+            (detector, frame) = silence::analyse(detector, chunk, params);
+            frames.push(frame);
+        }
+        measured += frames.len() * frame_len;
+        if on_frames(&frames) == Flow::Stop {
             break;
         }
     }
-    (mono, seen_errors)
+    Streamed {
+        mono,
+        errors: seen_errors,
+        heard_speech: detector.heard_speech(),
+    }
 }
 
-/// Turns captured mono audio into a [`Recording`], or the error that ended it.
+/// Turns captured audio into a [`Recording`], or the error that ended it.
 fn finish(
     device: String,
-    mono: Vec<f32>,
+    streamed: Streamed,
     sample_rate: u32,
-    errors: &[cpal::Error],
+    params: &Params,
 ) -> Result<Recording, RecordError> {
+    let Streamed {
+        mono,
+        errors,
+        heard_speech,
+    } = streamed;
     if let Some(source) = errors.iter().find(|error| is_fatal(error)) {
         return Err(RecordError::Stream {
             device,
@@ -236,10 +287,22 @@ fn finish(
         return Err(RecordError::Silent { device });
     }
     let samples = resample(mono, sample_rate, SAMPLE_RATE).map_err(RecordError::Resample)?;
+    // The live detector decides whether there is speech: its noise floor follows steady
+    // noise such as typing, which `speech_span`, measuring against the quietest part of
+    // the recording, can mistake for speech. `speech_span` only trims. It cuts frames
+    // at other points than the live detector, at 16 kHz instead of the native rate, so a
+    // burst that just reached `start_frames` live can fall short there; keep everything
+    // then rather than lose the speech.
+    let speech = if heard_speech {
+        silence::speech_span(&samples, SAMPLE_RATE, params).or(Some(0..samples.len()))
+    } else {
+        None
+    };
     Ok(Recording {
         samples,
         device,
-        overruns: count_overruns(errors),
+        overruns: count_overruns(&errors),
+        speech,
     })
 }
 
@@ -316,17 +379,25 @@ fn device_name(device: &Device) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::silence::Event;
 
+    /// 30-sample frames, so short buffers span frame boundaries.
     const RATE: u32 = 1_000;
+    const FRAME_LEN: usize = 30;
+
+    /// Constant samples at `db` dBFS: their RMS level is exactly `db`.
+    fn level(db: f32, len: usize) -> Vec<f32> {
+        vec![10_f32.powf(db / 20.0); len]
+    }
 
     /// Runs `stream_mono` on `buffers`, already queued, with the senders kept alive so
-    /// only `on_audio`, an error or digital silence ends it.
+    /// only `on_frames`, an error or digital silence ends it.
     fn stream(
         buffers: &[Vec<f32>],
         stream_errors: &[ErrorKind],
         channels: usize,
-        on_audio: impl FnMut(&[f32], u32) -> Flow,
-    ) -> (Vec<f32>, Vec<cpal::Error>) {
+        on_frames: impl FnMut(&[Frame]) -> Flow,
+    ) -> Streamed {
         let (sample_sender, samples) = mpsc::channel();
         let (error_sender, errors) = mpsc::channel();
         for buffer in buffers {
@@ -335,13 +406,14 @@ mod tests {
         for &kind in stream_errors {
             error_sender.send(kind.into()).unwrap();
         }
-        stream_mono(&samples, &errors, channels, RATE, on_audio)
+        let params = Params::default();
+        stream_mono(&samples, &errors, channels, RATE, &params, on_frames)
     }
 
-    /// Stops once `on_audio` has seen `limit` calls.
-    fn stop_after(limit: usize) -> impl FnMut(&[f32], u32) -> Flow {
+    /// Stops once `on_frames` has seen `limit` calls.
+    fn stop_after(limit: usize) -> impl FnMut(&[Frame]) -> Flow {
         let mut calls = 0;
-        move |_, _| {
+        move |_| {
             calls += 1;
             if calls >= limit {
                 Flow::Stop
@@ -352,34 +424,68 @@ mod tests {
     }
 
     #[test]
-    fn stream_hands_each_buffer_downmixed_with_the_native_rate() {
+    fn stream_downmixes_each_buffer_in_order() {
         let buffers = [vec![0.1, 0.3, 0.5, 0.7], vec![-0.2, 0.2]];
+        let streamed = stream(&buffers, &[], 2, stop_after(2));
+        assert_eq!(streamed.mono, [0.2, 0.6, 0.0]);
+    }
+
+    #[test]
+    fn stream_measures_frames_that_span_buffers() {
+        // Four buffers of 20 samples: frames end after the 2nd and 3rd buffer.
+        let buffers = vec![level(-20.0, 20); 4];
         let mut seen = Vec::new();
-        let (mono, _) = stream(&buffers, &[], 2, |audio, rate| {
-            seen.push((audio.to_vec(), rate));
-            if seen.len() == 2 {
-                Flow::Stop
-            } else {
-                Flow::Continue
-            }
+        let mut on_frames = stop_after(4);
+        stream(&buffers, &[], 1, |frames| {
+            seen.push(
+                frames
+                    .iter()
+                    .map(|frame| frame.level_db)
+                    .collect::<Vec<_>>(),
+            );
+            on_frames(frames)
         });
-        assert_eq!(seen, [(vec![0.2, 0.6], RATE), (vec![0.0], RATE)]);
-        assert_eq!(mono, [0.2, 0.6, 0.0]);
+        let counts: Vec<usize> = seen.iter().map(Vec::len).collect();
+        assert_eq!(counts, [0, 1, 1, 0]);
+        for level_db in seen.concat() {
+            assert!((level_db + 20.0).abs() < 0.01, "{level_db}");
+        }
     }
 
     #[test]
-    fn stream_stops_when_on_audio_says_so() {
+    fn stream_reports_speech_after_a_quiet_start() {
+        let mut buffers = vec![level(-70.0, FRAME_LEN); 10];
+        buffers.extend(vec![level(-30.0, FRAME_LEN); 5]);
+        let mut events = Vec::new();
+        let mut on_frames = stop_after(buffers.len());
+        let streamed = stream(&buffers, &[], 1, |frames| {
+            events.extend(frames.iter().filter_map(|frame| frame.event));
+            on_frames(frames)
+        });
+        assert_eq!(events, [Event::SpeechStarted]);
+        assert!(streamed.heard_speech);
+    }
+
+    #[test]
+    fn stream_without_loud_frames_hears_no_speech() {
+        let buffers = vec![level(-70.0, FRAME_LEN); 10];
+        let streamed = stream(&buffers, &[], 1, stop_after(10));
+        assert!(!streamed.heard_speech);
+    }
+
+    #[test]
+    fn stream_stops_when_on_frames_says_so() {
         let buffers = [vec![0.1; 10], vec![0.2; 10], vec![0.3; 10]];
-        let (mono, _) = stream(&buffers, &[], 1, stop_after(2));
-        assert_eq!(mono.len(), 20);
+        let streamed = stream(&buffers, &[], 1, stop_after(2));
+        assert_eq!(streamed.mono.len(), 20);
     }
 
     #[test]
-    fn stream_calls_on_audio_without_audio_every_poll_interval() {
+    fn stream_calls_on_frames_without_audio_every_poll_interval() {
         let started = std::time::Instant::now();
         let mut calls = Vec::new();
-        let (mono, _) = stream(&[], &[], 1, |audio, _| {
-            calls.push(audio.len());
+        let streamed = stream(&[], &[], 1, |frames| {
+            calls.push(frames.len());
             if calls.len() == 3 {
                 Flow::Stop
             } else {
@@ -387,7 +493,7 @@ mod tests {
             }
         });
         assert_eq!(calls, [0, 0, 0]);
-        assert!(mono.is_empty());
+        assert!(streamed.mono.is_empty());
         assert!(started.elapsed() >= 3 * POLL_INTERVAL);
     }
 
@@ -397,57 +503,101 @@ mod tests {
         let (_error_sender, errors) = mpsc::channel();
         sample_sender.send(vec![0.1; 10]).unwrap();
         drop(sample_sender);
-        let (mono, _) = stream_mono(&samples, &errors, 1, RATE, |_, _| Flow::Continue);
-        assert_eq!(mono.len(), 10);
+        let params = Params::default();
+        let streamed = stream_mono(&samples, &errors, 1, RATE, &params, |_| Flow::Continue);
+        assert_eq!(streamed.mono.len(), 10);
     }
 
     #[test]
     fn stream_stops_at_a_fatal_error_and_reports_it() {
         let buffers = [vec![0.1; 10], vec![0.1; 10]];
-        let (mono, errors) = stream(&buffers, &[ErrorKind::DeviceNotAvailable], 1, |_, _| {
+        let streamed = stream(&buffers, &[ErrorKind::DeviceNotAvailable], 1, |_| {
             Flow::Continue
         });
-        assert!(mono.is_empty());
-        assert!(errors.iter().any(is_fatal));
+        assert!(streamed.mono.is_empty());
+        assert!(streamed.errors.iter().any(is_fatal));
     }
 
     #[test]
     fn stream_keeps_recording_through_an_overrun() {
         let buffers = [vec![0.1; 10], vec![0.1; 10]];
-        let (mono, errors) = stream(&buffers, &[ErrorKind::Xrun], 1, stop_after(2));
-        assert_eq!(mono.len(), 20);
-        assert_eq!(count_overruns(&errors), 1);
+        let streamed = stream(&buffers, &[ErrorKind::Xrun], 1, stop_after(2));
+        assert_eq!(streamed.mono.len(), 20);
+        assert_eq!(count_overruns(&streamed.errors), 1);
     }
 
     #[test]
     fn stream_stops_after_a_second_of_digital_silence() {
         let buffers = vec![vec![0.0; 100]; 15];
-        let (mono, _) = stream(&buffers, &[], 1, |_, _| Flow::Continue);
-        assert_eq!(mono.len(), RATE as usize);
-        assert!(is_digital_silence(&mono));
+        let streamed = stream(&buffers, &[], 1, |_| Flow::Continue);
+        assert_eq!(streamed.mono.len(), RATE as usize);
+        assert!(is_digital_silence(&streamed.mono));
     }
 
     #[test]
     fn stream_keeps_recording_when_signal_follows_a_short_silent_start() {
         let mut buffers = vec![vec![0.0; 100]; 5];
         buffers.extend(vec![vec![0.01; 100]; 10]);
-        let (mono, _) = stream(&buffers, &[], 1, stop_after(15));
-        assert_eq!(mono.len(), 1_500);
+        let streamed = stream(&buffers, &[], 1, stop_after(15));
+        assert_eq!(streamed.mono.len(), 1_500);
+    }
+
+    /// Captured audio for `finish`, without stream errors.
+    fn streamed(mono: Vec<f32>, heard_speech: bool) -> Streamed {
+        Streamed {
+            mono,
+            errors: Vec::new(),
+            heard_speech,
+        }
     }
 
     #[test]
     fn fatal_error_wins_over_digital_silence() {
-        let errors = [ErrorKind::DeviceNotAvailable.into()];
-        let result = finish("mic".to_owned(), vec![0.0; 480], RATE, &errors);
+        let mut captured = streamed(vec![0.0; 480], false);
+        captured.errors.push(ErrorKind::DeviceNotAvailable.into());
+        let result = finish("mic".to_owned(), captured, RATE, &Params::default());
         assert!(matches!(result, Err(RecordError::Stream { .. })));
     }
 
     #[test]
     fn finish_counts_overruns_in_a_good_recording() {
-        let errors = [ErrorKind::Xrun.into()];
-        let recording = finish("mic".to_owned(), vec![0.1; 480], RATE, &errors).unwrap();
+        let mut captured = streamed(vec![0.1; 480], false);
+        captured.errors.push(ErrorKind::Xrun.into());
+        let recording = finish("mic".to_owned(), captured, RATE, &Params::default()).unwrap();
         assert_eq!(recording.overruns, 1);
         assert!(!recording.samples.is_empty());
+    }
+
+    /// One second of quiet room, one of speech, two of quiet room.
+    fn quiet_loud_quiet() -> Vec<f32> {
+        let mut mono = level(-70.0, RATE as usize);
+        mono.extend(level(-30.0, RATE as usize));
+        mono.extend(level(-70.0, 2 * RATE as usize));
+        mono
+    }
+
+    #[test]
+    fn finish_trims_to_the_speech_the_live_detector_heard() {
+        let captured = streamed(quiet_loud_quiet(), true);
+        let recording = finish("mic".to_owned(), captured, RATE, &Params::default()).unwrap();
+        let speech = recording.speech.expect("speech range");
+        let seconds = |sample: usize| sample as f32 / SAMPLE_RATE as f32;
+        assert!(seconds(speech.start) < 1.0 && seconds(speech.start) > 0.5);
+        assert!(seconds(speech.end) > 2.0 && seconds(speech.end) < 2.5);
+    }
+
+    #[test]
+    fn finish_keeps_everything_when_only_the_live_detector_heard_speech() {
+        let captured = streamed(level(-70.0, RATE as usize), true);
+        let recording = finish("mic".to_owned(), captured, RATE, &Params::default()).unwrap();
+        assert_eq!(recording.speech, Some(0..recording.samples.len()));
+    }
+
+    #[test]
+    fn finish_has_no_speech_when_the_live_detector_heard_none() {
+        let captured = streamed(quiet_loud_quiet(), false);
+        let recording = finish("mic".to_owned(), captured, RATE, &Params::default()).unwrap();
+        assert_eq!(recording.speech, None);
     }
 
     #[test]

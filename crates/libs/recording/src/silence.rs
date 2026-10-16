@@ -1,11 +1,14 @@
 //! Energy-based speech detection on 30 ms frames.
 //!
 //! Two uses with the same threshold:
-//! - [`step`] runs live while recording, one frame at a time, and reports when speech
-//!   starts and ends. It only knows the past, so it estimates the noise floor as it goes.
-//! - [`speech_span`] runs on a finished recording and finds the range from the first to
-//!   the last speech, for trimming. It sees the whole recording, so the quietest window
-//!   (below) is its noise floor.
+//! - `step` runs live while recording, one frame at a time, and reports when speech
+//!   starts and ends ([`Frame`], from [`crate::record_streaming`]). It only knows the
+//!   past, so it estimates the noise floor as it goes. Whether it heard speech at all
+//!   decides whether a recording holds speech: its floor follows steady noise such as
+//!   typing.
+//! - `speech_span` runs on a finished recording and finds the range from the first to
+//!   the last speech, for trimming ([`crate::Recording::speech`]). It sees the whole
+//!   recording, so the quietest window (below) is its noise floor.
 //!
 //! Both take the noise floor from windows of [`FLOOR_FRAMES`] frames: the loudest frame
 //! of a window is its level, and windows holding digital silence ([`MIN_DB`]) are
@@ -86,13 +89,13 @@ pub const fn frames(ms: u32) -> u32 {
 }
 
 /// Samples in one frame at `sample_rate`. Zero below 34 Hz; audio runs at 8 kHz or more.
-pub fn frame_len(sample_rate: u32) -> usize {
+pub(crate) fn frame_len(sample_rate: u32) -> usize {
     (sample_rate * FRAME_MS / 1_000) as usize
 }
 
 /// Root mean square level of `frame` in dB relative to full scale: 0 dB is a square wave
 /// at ±1, a full-scale sine is -3 dB. Silence and an empty frame give [`MIN_DB`].
-pub fn level_db(frame: &[f32]) -> f32 {
+pub(crate) fn level_db(frame: &[f32]) -> f32 {
     if frame.is_empty() {
         return MIN_DB;
     }
@@ -115,7 +118,7 @@ fn start_threshold_db(floor_db: f32, params: &Params) -> f32 {
     (floor_db.min(params.max_floor_db) + params.start_above_floor_db).max(params.min_start_db)
 }
 
-/// What [`step`] reports.
+/// What the live speech detector reports at a [`Frame`].
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Event {
     SpeechStarted,
@@ -126,7 +129,7 @@ pub enum Event {
 
 /// State of the live detector, passed into [`step`] and returned by it.
 #[derive(Clone, Copy, Debug, PartialEq)]
-pub struct Detector {
+pub(crate) struct Detector {
     /// Estimated background level. Starts at +inf, so the first full window sets it.
     floor_db: f32,
     /// Levels of the frames before the current one, oldest first, which complete its
@@ -146,6 +149,13 @@ enum Phase {
     Speech { quiet_run: u32 },
 }
 
+impl Detector {
+    /// Whether [`Event::SpeechStarted`] has been reported.
+    pub(crate) fn heard_speech(&self) -> bool {
+        self.heard_speech
+    }
+}
+
 impl Default for Detector {
     fn default() -> Self {
         Self {
@@ -163,7 +173,11 @@ impl Default for Detector {
 /// The frame is compared with the noise floor of the frames before it; only then does
 /// it update the floor. Otherwise a loud frame would raise the floor it is measured
 /// against.
-pub fn step(detector: Detector, level_db: f32, params: &Params) -> (Detector, Option<Event>) {
+pub(crate) fn step(
+    detector: Detector,
+    level_db: f32,
+    params: &Params,
+) -> (Detector, Option<Event>) {
     let start_db = start_threshold_db(detector.floor_db, params);
     let end_db = start_db - params.hysteresis_db;
 
@@ -213,6 +227,33 @@ pub fn step(detector: Detector, level_db: f32, params: &Params) -> (Detector, Op
     (next, event)
 }
 
+/// One measured frame of a recording, as [`crate::record_streaming`] reports it.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Frame {
+    /// RMS level of the frame in dBFS; [`MIN_DB`] for digital silence.
+    pub level_db: f32,
+    /// Level the frame had to reach to count as speech, from the noise floor before it.
+    pub start_db: f32,
+    /// Noise floor after the frame; +inf until the first window without digital silence.
+    pub floor_db: f32,
+    /// What the detector reported at this frame.
+    pub event: Option<Event>,
+}
+
+/// Measures one frame of mono samples and feeds its level to the detector.
+pub(crate) fn analyse(detector: Detector, samples: &[f32], params: &Params) -> (Detector, Frame) {
+    let level_db = level_db(samples);
+    let start_db = start_threshold_db(detector.floor_db, params);
+    let (detector, event) = step(detector, level_db, params);
+    let frame = Frame {
+        level_db,
+        start_db,
+        floor_db: detector.floor_db,
+        event,
+    };
+    (detector, frame)
+}
+
 /// Range of `samples` from the first to the last speech, padded by
 /// [`Params::pad_before_frames`] and [`Params::pad_after_frames`]. `None` if nothing in
 /// the recording counts as speech.
@@ -224,7 +265,11 @@ pub fn step(detector: Detector, level_db: f32, params: &Params) -> (Detector, Op
 ///
 /// # Panics
 /// If `sample_rate` is below 34 Hz, where a frame has no samples.
-pub fn speech_span(samples: &[f32], sample_rate: u32, params: &Params) -> Option<Range<usize>> {
+pub(crate) fn speech_span(
+    samples: &[f32],
+    sample_rate: u32,
+    params: &Params,
+) -> Option<Range<usize>> {
     let frame_len = frame_len(sample_rate);
     let levels: Vec<f32> = samples.chunks(frame_len).map(level_db).collect();
     let floor_db = levels
@@ -357,6 +402,43 @@ mod tests {
             "started at {started} ms"
         );
         assert!((4_170..=4_230).contains(&ended), "ended at {ended} ms");
+    }
+
+    #[test]
+    fn heard_speech_stays_true_after_speech_ends() {
+        let params = Params::default();
+        let mut samples = noise(-70.0, 1.0, RATE);
+        samples.extend(mix(&tone(-30.0, 1.0, RATE), &noise(-70.0, 1.0, RATE)));
+        samples.extend(noise(-70.0, 2.0, RATE));
+        let mut detector = Detector::default();
+        let mut heard = Vec::new();
+        for frame in samples.chunks_exact(frame_len(RATE)) {
+            let event;
+            (detector, event) = step(detector, level_db(frame), &params);
+            if let Some(event) = event {
+                heard.push((event, detector.heard_speech()));
+            }
+        }
+        assert_eq!(
+            heard,
+            [(Event::SpeechStarted, true), (Event::SpeechEnded, true)]
+        );
+    }
+
+    #[test]
+    fn analysed_frame_reports_the_threshold_it_was_compared_against() {
+        let params = Params::default();
+        let frame_len = frame_len(RATE);
+        let mut detector = Detector::default();
+        for quiet in noise(-70.0, 0.3, RATE).chunks_exact(frame_len) {
+            detector = analyse(detector, quiet, &params).0;
+        }
+        let floor_before = detector.floor_db;
+        let (_, frame) = analyse(detector, &tone(-30.0, 0.03, RATE), &params);
+        assert_eq!(frame.start_db, start_threshold_db(floor_before, &params));
+        assert!((frame.level_db + 30.0).abs() < 0.5, "{}", frame.level_db);
+        // The loud frame raises the floor by at most `floor_rise_db`.
+        assert!(frame.floor_db <= floor_before + params.floor_rise_db);
     }
 
     #[test]
