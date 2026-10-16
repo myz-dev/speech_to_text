@@ -1,11 +1,13 @@
 //! Audio input for the speech models: loading WAV files, recording from the microphone,
-//! and converting audio to 16 kHz mono `f32`.
+//! converting audio to 16 kHz mono `f32`, and detecting speech in it.
 //!
 //! See [PLAN.md](../../../PLAN.md).
 
 mod convert;
 mod microphone;
 mod wav;
+
+pub mod silence;
 
 pub use convert::{ResampleError, resample, to_mono};
 pub use microphone::{RecordError, Recording, record};
