@@ -7,9 +7,7 @@ use std::time::Instant;
 use anyhow::{Context, bail};
 use clap::{Parser, Subcommand, ValueEnum};
 use cleanup::Language;
-use transcription::Device;
-use transcription::parakeet::ParakeetModel;
-use transcription::whisper::WhisperModel;
+use transcription::{Device, Model, Transcript};
 
 pub mod bench;
 pub mod clean;
@@ -17,11 +15,7 @@ pub mod record;
 pub mod run;
 pub mod transcribe;
 
-/// Whisper model file inside the models directory.
-pub const WHISPER_MODEL_FILE: &str = "ggml-large-v3-turbo.bin";
-
-/// Parakeet model directory inside the models directory.
-pub const PARAKEET_MODEL_DIR: &str = "parakeet-tdt-0.6b-v3";
+pub use transcription::{PARAKEET_MODEL_DIR, WHISPER_MODEL_FILE};
 
 /// Ollama model used for cleanup unless `--model` names another.
 pub const DEFAULT_CLEANUP_MODEL: &str = "gemma3:4b";
@@ -97,6 +91,15 @@ pub enum Engine {
     Parakeet,
 }
 
+impl From<Engine> for transcription::Engine {
+    fn from(engine: Engine) -> Self {
+        match engine {
+            Engine::Whisper => transcription::Engine::Whisper,
+            Engine::Parakeet => transcription::Engine::Parakeet,
+        }
+    }
+}
+
 /// Executes the parsed command, writing its results to `out`.
 pub fn run(cli: Cli, out: &mut dyn Write) -> anyhow::Result<()> {
     match &cli.command {
@@ -160,54 +163,10 @@ fn wait_for_enter() -> anyhow::Result<()> {
     Ok(())
 }
 
-/// A loaded speech model of the engine chosen on the command line.
-enum Model {
-    Whisper(WhisperModel),
-    Parakeet(ParakeetModel),
-}
-
-/// Loads the model for `stt.engine`.
+/// Loads the model for the engine and device chosen on the command line.
 fn load_model(stt: &SttArgs) -> anyhow::Result<Model> {
-    let model = match stt.engine {
-        Engine::Whisper => {
-            let device = if stt.cpu { Device::Cpu } else { Device::Gpu };
-            let path = stt.models.join(WHISPER_MODEL_FILE);
-            Model::Whisper(WhisperModel::load(&path, device)?)
-        }
-        Engine::Parakeet => {
-            let path = stt.models.join(PARAKEET_MODEL_DIR);
-            Model::Parakeet(ParakeetModel::load(&path)?)
-        }
-    };
-    Ok(model)
-}
-
-struct Transcript {
-    text: String,
-    /// Language code the engine transcribed in, if it reports one.
-    language: Option<&'static str>,
-}
-
-/// Transcribes 16 kHz mono `samples`. `language` is a hint for Whisper; Parakeet
-/// ignores it.
-fn transcribe_samples(
-    model: &mut Model,
-    samples: &[f32],
-    language: Option<Lang>,
-) -> anyhow::Result<Transcript> {
-    Ok(match model {
-        Model::Whisper(model) => {
-            let transcript = model.transcribe(samples, language.map(Lang::code))?;
-            Transcript {
-                text: transcript.text,
-                language: Some(transcript.language),
-            }
-        }
-        Model::Parakeet(model) => Transcript {
-            text: model.transcribe(samples)?,
-            language: None,
-        },
-    })
+    let device = if stt.cpu { Device::Cpu } else { Device::Gpu };
+    Ok(Model::load(stt.engine.into(), &stt.models, device)?)
 }
 
 /// The summary line after a transcript: language (if the engine reports one), audio
