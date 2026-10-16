@@ -4,8 +4,15 @@
 //! - [`step`] runs live while recording, one frame at a time, and reports when speech
 //!   starts and ends. It only knows the past, so it estimates the noise floor as it goes.
 //! - [`speech_span`] runs on a finished recording and finds the range from the first to
-//!   the last speech, for trimming. It sees the whole recording, so the quietest frame
-//!   is its noise floor.
+//!   the last speech, for trimming. It sees the whole recording, so the quietest window
+//!   (below) is its noise floor.
+//!
+//! Both take the noise floor from windows of [`FLOOR_FRAMES`] frames: the loudest frame
+//! of a window is its level, and windows holding digital silence ([`MIN_DB`]) are
+//! skipped. Digital silence is a missing signal (the microphone starting, a dropped
+//! buffer), not a quiet room; and a quiet stretch shorter than a window, such as the edge
+//! of a dropout, is not the room either. Taking either as the floor would lower the
+//! threshold until a moderately loud background counts as speech.
 //!
 //! Pauses inside the speech are never removed: the speech models handle them.
 //!
@@ -21,6 +28,9 @@ pub const FRAME_MS: u32 = 30;
 
 /// Level reported for digital silence, where the logarithm would be minus infinity.
 pub const MIN_DB: f32 = -100.0;
+
+/// Frames in one window of the noise floor estimate.
+pub const FLOOR_FRAMES: usize = 3;
 
 /// Thresholds and durations of the detector. Durations are in frames of [`FRAME_MS`].
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -39,7 +49,7 @@ pub struct Params {
     /// threshold from toggling between speech and silence.
     pub hysteresis_db: f32,
     /// How fast the live noise floor follows a louder background, per frame. It follows
-    /// a quieter one at once.
+    /// a quieter one as soon as a whole window ([`FLOOR_FRAMES`]) is quieter.
     pub floor_rise_db: f32,
     /// Frames above the threshold before speech counts; shorter bursts are clicks.
     pub start_frames: u32,
@@ -64,8 +74,8 @@ impl Default for Params {
             start_frames: frames(90),
             hangover_frames: frames(1_200),
             no_speech_frames: frames(10_000),
-            pad_before_frames: frames(250),
-            pad_after_frames: frames(400),
+            pad_before_frames: frames(240),
+            pad_after_frames: frames(390),
         }
     }
 }
@@ -91,6 +101,15 @@ pub fn level_db(frame: &[f32]) -> f32 {
     (10.0 * mean_square.log10()).max(MIN_DB)
 }
 
+/// Noise floor of one window of frame levels: its loudest level. `None` if the window
+/// holds digital silence.
+fn window_floor_db(levels: &[f32]) -> Option<f32> {
+    if levels.iter().any(|&level| level <= MIN_DB) {
+        return None;
+    }
+    levels.iter().copied().reduce(f32::max)
+}
+
 /// Level a frame must reach to count as speech, given the noise floor.
 fn start_threshold_db(floor_db: f32, params: &Params) -> f32 {
     (floor_db.min(params.max_floor_db) + params.start_above_floor_db).max(params.min_start_db)
@@ -108,8 +127,12 @@ pub enum Event {
 /// State of the live detector, passed into [`step`] and returned by it.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct Detector {
-    /// Estimated background level. Starts at +inf, so the first frame sets it.
+    /// Estimated background level. Starts at +inf, so the first full window sets it.
     floor_db: f32,
+    /// Levels of the frames before the current one, oldest first, which complete its
+    /// floor window. Start as digital silence, so no window is complete before
+    /// [`FLOOR_FRAMES`] frames.
+    recent_db: [f32; FLOOR_FRAMES - 1],
     phase: Phase,
     frames_seen: u32,
     heard_speech: bool,
@@ -127,6 +150,7 @@ impl Default for Detector {
     fn default() -> Self {
         Self {
             floor_db: f32::INFINITY,
+            recent_db: [MIN_DB; FLOOR_FRAMES - 1],
             phase: Phase::Silence { loud_run: 0 },
             frames_seen: 0,
             heard_speech: false,
@@ -172,8 +196,16 @@ pub fn step(detector: Detector, level_db: f32, params: &Params) -> (Detector, Op
         event = Some(Event::NoSpeechTimeout);
     }
 
+    let mut window = [level_db; FLOOR_FRAMES];
+    window[..FLOOR_FRAMES - 1].copy_from_slice(&detector.recent_db);
+    let floor_db = match window_floor_db(&window) {
+        Some(window_db) => window_db.min(detector.floor_db + params.floor_rise_db),
+        None => detector.floor_db,
+    };
+
     let next = Detector {
-        floor_db: level_db.min(detector.floor_db + params.floor_rise_db),
+        floor_db,
+        recent_db: std::array::from_fn(|i| window[i + 1]),
         phase,
         frames_seen,
         heard_speech,
@@ -187,7 +219,7 @@ pub fn step(detector: Detector, level_db: f32, params: &Params) -> (Detector, Op
 ///
 /// `samples` is mono at `sample_rate`.
 ///
-/// The noise floor is the quietest frame of the recording. An unusually quiet frame
+/// The noise floor is the quietest window of the recording. An unusually quiet window
 /// lowers the threshold, which keeps more audio: errors cost speed, not words.
 ///
 /// # Panics
@@ -195,7 +227,10 @@ pub fn step(detector: Detector, level_db: f32, params: &Params) -> (Detector, Op
 pub fn speech_span(samples: &[f32], sample_rate: u32, params: &Params) -> Option<Range<usize>> {
     let frame_len = frame_len(sample_rate);
     let levels: Vec<f32> = samples.chunks(frame_len).map(level_db).collect();
-    let floor_db = levels.iter().copied().fold(f32::INFINITY, f32::min);
+    let floor_db = levels
+        .windows(FLOOR_FRAMES)
+        .filter_map(window_floor_db)
+        .fold(f32::INFINITY, f32::min);
     let start_db = start_threshold_db(floor_db, params);
 
     // Frame ranges of the first and last speech: runs of at least `start_frames` loud
@@ -405,6 +440,38 @@ mod tests {
         assert_eq!(events(&samples, RATE), []);
     }
 
+    /// A -45 dBFS fan that the floor must learn, interrupted by digital silence:
+    /// 0.5 s at the start (as a microphone may deliver) and dropouts of 20 ms and 0.5 s.
+    /// No zero run is aligned to a frame, so frames at its edges are partly silent.
+    fn fan_with_digital_silence(rate: u32) -> Vec<f32> {
+        let zeros = |seconds: f32| vec![0.0; (rate as f32 * seconds) as usize + 7];
+        [
+            zeros(0.5),
+            noise(-45.0, 3.0, rate),
+            zeros(0.02),
+            noise(-45.0, 3.0, rate),
+            zeros(0.5),
+            noise(-45.0, 6.0, rate),
+        ]
+        .concat()
+    }
+
+    #[test]
+    fn digital_silence_does_not_lower_the_live_floor() {
+        let found = events(&fan_with_digital_silence(RATE), RATE);
+        assert_eq!(kinds(&found), [Event::NoSpeechTimeout]);
+    }
+
+    #[test]
+    fn speech_after_digital_silence_over_a_loud_background_is_detected() {
+        let background = fan_with_digital_silence(RATE);
+        let mut speech = vec![0.0; background.len()];
+        let at = 5 * RATE as usize;
+        speech[at..at + RATE as usize].copy_from_slice(&tone(-20.0, 1.0, RATE));
+        let found = events(&mix(&background, &speech), RATE);
+        assert_eq!(kinds(&found), [Event::SpeechStarted, Event::SpeechEnded]);
+    }
+
     #[test]
     fn speech_span_covers_the_speech_with_padding() {
         let samples = [
@@ -453,6 +520,18 @@ mod tests {
         assert_eq!(speech_span(&noise(-60.0, 2.0, RATE), RATE, &params), None);
         assert_eq!(speech_span(&click, RATE, &params), None);
         assert_eq!(speech_span(&[], RATE, &params), None);
+    }
+
+    #[test]
+    fn speech_span_ignores_digital_silence_and_a_short_last_frame() {
+        let params = Params::default();
+        let mut samples = fan_with_digital_silence(RATE);
+        // Whole frames, then 2 samples at -60 dBFS as the last chunk: quieter than the
+        // fan, but not digital silence, so only the window keeps them from becoming the
+        // floor.
+        samples.truncate(samples.len() / frame_len(RATE) * frame_len(RATE));
+        samples.extend([1e-3, -1e-3]);
+        assert_eq!(speech_span(&samples, RATE, &params), None);
     }
 
     #[test]
