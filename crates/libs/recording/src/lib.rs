@@ -10,7 +10,7 @@ mod wav;
 pub mod silence;
 
 pub use convert::{ResampleError, resample, to_mono};
-pub use microphone::{RecordError, Recording, record};
+pub use microphone::{Flow, RecordError, Recording, record, record_streaming};
 pub use wav::{LoadWavError, SaveWavError, load_wav, save_wav};
 
 /// Sample rate expected by both Whisper and Parakeet.
