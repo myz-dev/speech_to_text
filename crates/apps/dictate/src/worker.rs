@@ -11,6 +11,7 @@ use anyhow::Context;
 use tauri::{AppHandle, Manager};
 use transcription::{Device, Engine, Model};
 
+use crate::paste;
 use crate::status::{self, Status, TranscriptEvent};
 
 /// Engine loaded at start. Parakeet is the faster one (see FINDINGS.md).
@@ -78,7 +79,8 @@ fn missing_model_hint(models: &Path) -> String {
     )
 }
 
-/// Records until the key is released, transcribes, and reports the transcript.
+/// Records until the key is released, transcribes, shows the transcript and pastes it
+/// into the focused app.
 fn dictate(app: &AppHandle, model: &mut Model, commands: &Receiver<Command>) -> anyhow::Result<()> {
     status::publish(app, Status::Recording);
     let mut stopped_at = Instant::now();
@@ -94,14 +96,18 @@ fn dictate(app: &AppHandle, model: &mut Model, commands: &Receiver<Command>) -> 
 
     status::publish(app, Status::Transcribing);
     let transcript = model.transcribe(&recording.samples, None)?;
+    // Shown before pasting, so the text is visible even if pasting fails.
     status::publish_transcript(
         app,
         TranscriptEvent {
-            text: transcript.text,
+            text: transcript.text.clone(),
             audio_secs,
             stop_to_text_secs: stopped_at.elapsed().as_secs_f64(),
         },
     );
+    if !transcript.text.is_empty() {
+        paste::paste(&transcript.text)?;
+    }
     Ok(())
 }
 
