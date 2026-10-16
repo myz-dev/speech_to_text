@@ -1,6 +1,7 @@
 //! Dictate: a macOS menu-bar app that records speech, transcribes it locally and
 //! pastes the text into the focused app.
 
+mod paste;
 mod shortcut;
 mod status;
 mod tray;

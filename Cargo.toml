@@ -19,9 +19,18 @@ eval = { path = "crates/libs/eval" }
 
 # External
 anyhow = "1.0.104"
+arboard = "3.7.0"
 clap = { version = "4.6.7", features = ["derive"] }
 cpal = "0.18.2"
 hound = "3.5.1"
+# Only the CoreGraphics parts used to post a keystroke and check its permission.
+objc2-core-graphics = { version = "0.3.2", default-features = false, features = [
+  "std",
+  "CGEvent",
+  "CGEventSource",
+  "CGEventTypes",
+  "CGRemoteOperation",
+] }
 # Release candidate: its API changes between rc versions, so pin the exact version.
 ort = "=2.0.0-rc.14"
 rubato = "5.0.1"
