@@ -58,12 +58,13 @@ function showStatus(status: Status) {
 }
 
 function showTranscript(transcript: Transcript) {
-  transcriptText.textContent = transcript.cleaned ?? transcript.text;
+  const text = transcript.cleaned ?? transcript.text;
+  transcriptText.textContent = text || "(no words recognized)";
   rawText.textContent = transcript.cleaned === null ? "" : `Raw: ${transcript.text}`;
   timings.textContent =
     `${transcript.audioSecs.toFixed(1)} s of audio, ` +
     `text ready ${transcript.stopToTextSecs.toFixed(2)} s after release` +
-    (transcript.pasted ? "" : ", on the clipboard: paste it with ⌘V");
+    (transcript.pasted || !text ? "" : ", on the clipboard: paste it with ⌘V");
 }
 
 function showSettings(settings: Settings) {

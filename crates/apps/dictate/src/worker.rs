@@ -131,13 +131,10 @@ fn dictate(
 
     status::publish(app, Status::Transcribing);
     let raw = model.transcribe(samples, None)?.text;
-    if raw.is_empty() {
-        return Ok(Status::Idle);
-    }
 
     // A failed cleanup still delivers the raw text, with a warning.
     let mut warning = None;
-    let cleaned = if settings.cleanup {
+    let cleaned = if settings.cleanup && !raw.is_empty() {
         status::publish(app, Status::CleaningUp);
         match cleanup::clean(CLEANUP_MODEL, &raw, settings.language.into()) {
             Ok(cleaned) => Some(cleaned),
@@ -164,6 +161,11 @@ fn dictate(
             pasted: settings.paste,
         },
     );
+    // No words were heard, or the cleanup removed them all (a lone "ähm"). Pasting or
+    // copying "" would replace the user's clipboard with nothing.
+    if text.is_empty() {
+        return Ok(Status::Idle);
+    }
     if settings.paste {
         let previous = paste::paste(&text)?;
         if let Err(error) = paste::restore_clipboard(previous) {
