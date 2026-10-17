@@ -7,7 +7,7 @@ import { listen } from "@tauri-apps/api/event";
 /** Mirrors `Status` in `src/status.rs`. */
 type Status =
   | { state: "loading" | "idle" | "recording" | "transcribing" }
-  | { state: "error"; message: string };
+  | { state: "warning" | "error"; message: string };
 
 /** Mirrors `TranscriptEvent` in `src/status.rs`. */
 interface Transcript {
@@ -35,7 +35,11 @@ const timings = element("timings");
 
 function showStatus(status: Status) {
   statusLine.textContent =
-    status.state === "error" ? `Error: ${status.message}` : LABELS[status.state];
+    status.state === "error"
+      ? `Error: ${status.message}`
+      : status.state === "warning"
+        ? `Warning: ${status.message}`
+        : LABELS[status.state];
   statusLine.className = status.state;
 }
 

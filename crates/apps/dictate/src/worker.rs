@@ -51,7 +51,7 @@ fn run(app: &AppHandle, keys: &Receiver<Key>) {
         }
         let pressed = Mode::Pressed { at: Instant::now() };
         match dictate(app, &mut model, keys, pressed) {
-            Ok(()) => status::publish(app, Status::Idle),
+            Ok(after) => status::publish(app, after),
             Err(error) => status::publish(app, Status::error(&error)),
         }
         // Presses made while transcribing were not meant to start a new recording.
@@ -78,13 +78,13 @@ fn missing_model_hint(models: &Path) -> String {
 
 /// Records until the hotkey or the speech detector ends the recording (see [`gesture`]),
 /// transcribes the speech, shows the transcript and pastes it into the focused app.
-/// A recording without speech ends here.
+/// A recording without speech ends here. Returns the status to show afterwards.
 fn dictate(
     app: &AppHandle,
     model: &mut Model,
     keys: &Receiver<Key>,
     mut mode: Mode,
-) -> anyhow::Result<()> {
+) -> anyhow::Result<Status> {
     status::publish(app, Status::Recording);
     let mut stopped_at = Instant::now();
     let recording = recording::record_streaming(&Params::default(), |frames| {
@@ -106,12 +106,12 @@ fn dictate(
     })?;
 
     let Some(speech) = recording.speech else {
-        return Ok(());
+        return Ok(Status::Idle);
     };
     let samples = &recording.samples[speech];
     let audio_secs = samples.len() as f64 / f64::from(recording::SAMPLE_RATE);
     if audio_secs < MIN_SPEECH_SECS {
-        return Ok(());
+        return Ok(Status::Idle);
     }
 
     status::publish(app, Status::Transcribing);
@@ -126,7 +126,10 @@ fn dictate(
         },
     );
     if !transcript.text.is_empty() {
-        paste::paste(&transcript.text)?;
+        let previous = paste::paste(&transcript.text)?;
+        if let Err(error) = paste::restore_clipboard(previous) {
+            return Ok(Status::warning(&error));
+        }
     }
-    Ok(())
+    Ok(Status::Idle)
 }

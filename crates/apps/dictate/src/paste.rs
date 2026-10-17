@@ -1,5 +1,6 @@
 //! Pastes text into the focused app: puts it on the clipboard and posts ⌘V, as if the
-//! user pressed it. The user's clipboard text is restored afterwards.
+//! user pressed it. The user's clipboard text is restored afterwards
+//! ([`restore_clipboard`]).
 //!
 //! Posting keystrokes to other apps needs the Accessibility permission (System
 //! Settings → Privacy & Security → Accessibility). In `cargo tauri dev` macOS asks
@@ -27,11 +28,12 @@ const KEY_V: u16 = 9;
 /// text instead.
 const PASTE_SETTLE: Duration = Duration::from_millis(250);
 
-/// Pastes `text` into the focused app.
+/// Pastes `text` into the focused app and returns the clipboard text it replaced, for
+/// [`restore_clipboard`].
 ///
 /// Without the Accessibility permission, macOS is asked to show its permission
 /// prompt, `text` stays on the clipboard for a manual ⌘V, and an error says so.
-pub fn paste(text: &str) -> anyhow::Result<()> {
+pub fn paste(text: &str) -> anyhow::Result<Option<String>> {
     let mut clipboard = Clipboard::new().context("cannot open the clipboard")?;
     // Only text can be restored. If the clipboard held an image or files, they are
     // replaced by the dictated text.
@@ -56,13 +58,19 @@ pub fn paste(text: &str) -> anyhow::Result<()> {
     }
 
     press_command_v()?;
+    Ok(previous)
+}
+
+/// Puts `previous` back on the clipboard once the target app has read the pasted text.
+/// Failing here does not undo the paste, so callers report it as a warning.
+pub fn restore_clipboard(previous: Option<String>) -> anyhow::Result<()> {
+    let Some(previous) = previous else {
+        return Ok(());
+    };
     thread::sleep(PASTE_SETTLE);
-    if let Some(previous) = previous {
-        clipboard
-            .set_text(previous)
-            .context("cannot restore the previous clipboard text")?;
-    }
-    Ok(())
+    Clipboard::new()
+        .and_then(|mut clipboard| clipboard.set_text(previous))
+        .context("the text was pasted, but the previous clipboard text could not be restored")
 }
 
 /// Opens System Settings at Privacy & Security → Accessibility. Failing to open it is
