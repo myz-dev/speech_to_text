@@ -150,6 +150,9 @@ fn dictate(
     };
     let text = cleaned.clone().unwrap_or_else(|| raw.clone());
 
+    // Without the permission the text goes to the clipboard, with a warning; the window
+    // explains how to allow pasting.
+    let pasted = settings.paste && paste::can_paste();
     // Shown before pasting, so the text is visible even if pasting fails.
     status::publish_transcript(
         app,
@@ -158,7 +161,7 @@ fn dictate(
             cleaned,
             audio_secs,
             stop_to_text_secs: stopped_at.elapsed().as_secs_f64(),
-            pasted: settings.paste,
+            pasted,
         },
     );
     // No words were heard, or the cleanup removed them all (a lone "ähm"). Pasting or
@@ -166,13 +169,16 @@ fn dictate(
     if text.is_empty() {
         return Ok(Status::Idle);
     }
-    if settings.paste {
+    if pasted {
         let previous = paste::paste(&text)?;
         if let Err(error) = paste::restore_clipboard(previous) {
             warning.get_or_insert(error);
         }
     } else {
         paste::copy(&text)?;
+        if settings.paste {
+            warning.get_or_insert(anyhow::anyhow!(paste::NOT_ALLOWED));
+        }
     }
     Ok(warning.map_or(Status::Idle, |error| Status::warning(&error)))
 }

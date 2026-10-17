@@ -13,6 +13,12 @@ use tauri::{ActivationPolicy, Manager, RunEvent, WindowEvent};
 
 use crate::status::Status;
 
+/// Restarts Dictate, e.g. so a newly granted Accessibility permission applies.
+#[tauri::command]
+fn restart(app: tauri::AppHandle) {
+    app.restart();
+}
+
 fn main() {
     tauri::Builder::default()
         .plugin(
@@ -26,6 +32,9 @@ fn main() {
             status::current_status,
             settings::settings,
             settings::set_settings,
+            paste::can_paste,
+            paste::request_paste_permission,
+            restart,
         ])
         .setup(|app| {
             // A menu-bar app: no Dock icon and no menu bar of its own.

@@ -28,11 +28,31 @@ const KEY_V: u16 = 9;
 /// text instead.
 const PASTE_SETTLE: Duration = Duration::from_millis(250);
 
+/// Shown when pasting is on but not allowed; SETUP.md's troubleshooting lists it.
+pub const NOT_ALLOWED: &str = "Dictate may not paste yet (see Paste automatically); the \
+                               text is on the clipboard, paste it with ⌘V";
+
+/// Whether Dictate may press ⌘V in other apps (the Accessibility permission). macOS
+/// checks this once per process: a permission granted while Dictate runs applies only
+/// after a restart.
+#[tauri::command]
+pub fn can_paste() -> bool {
+    CGPreflightPostEventAccess()
+}
+
+/// Asks for the Accessibility permission: lists Dictate in the Accessibility settings
+/// and opens that page. macOS shows its own prompt only the first time; after a denial
+/// it stays silent, so the page is opened either way. The window explains the steps
+/// before the user triggers this.
+#[tauri::command]
+pub fn request_paste_permission() {
+    CGRequestPostEventAccess();
+    open_accessibility_settings();
+}
+
 /// Pastes `text` into the focused app and returns the clipboard text it replaced, for
-/// [`restore_clipboard`].
-///
-/// Without the Accessibility permission, macOS is asked to show its permission
-/// prompt, `text` stays on the clipboard for a manual ⌘V, and an error says so.
+/// [`restore_clipboard`]. Needs [`can_paste`]; without it, `text` stays on the
+/// clipboard and an error says so.
 pub fn paste(text: &str) -> anyhow::Result<Option<String>> {
     let mut clipboard = Clipboard::new().context("cannot open the clipboard")?;
     // Only text can be restored. If the clipboard held an image or files, they are
@@ -44,17 +64,8 @@ pub fn paste(text: &str) -> anyhow::Result<Option<String>> {
         .text(text)
         .context("cannot put the text on the clipboard")?;
 
-    if !CGPreflightPostEventAccess() {
-        // Lists the app in the Accessibility settings and shows the system prompt,
-        // but only the first time: after a denial, macOS stays silent. Opening the
-        // settings page covers that case; the permission applies from the next paste on.
-        CGRequestPostEventAccess();
-        open_accessibility_settings();
-        bail!(
-            "pasting needs the Accessibility permission: switch it on in the opened \
-             System Settings page (Privacy & Security → Accessibility); the text is on \
-             the clipboard, paste it with ⌘V"
-        );
+    if !can_paste() {
+        bail!(NOT_ALLOWED);
     }
 
     press_command_v()?;

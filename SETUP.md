@@ -76,13 +76,17 @@ Short pauses do not end a recording. If no speech is heard, nothing is pasted.
 ## 5. Optional: paste automatically
 
 To have the text typed into the app you are using, tick **Paste automatically** in the
-window. macOS then needs to allow Dictate to press ⌘V for you:
+window. macOS then needs to allow Dictate to press ⌘V for you (the **Accessibility**
+permission). The window shows the steps:
 
-1. Dictate once. macOS asks for the **Accessibility** permission and opens
-   **System Settings → Privacy & Security → Accessibility**.
-2. Switch **Dictate** on.
-3. Dictate again: the text is now typed where your cursor is. Your previous clipboard
-   text is put back afterwards.
+1. Click **Open Accessibility settings**. If macOS first shows a dialog, choose
+   **Open System Settings**.
+2. In **System Settings → Privacy & Security → Accessibility**, switch **Dictate** on.
+3. Click **Restart Dictate** in the window: macOS applies the permission only after a
+   restart.
+
+From then on the text is typed where your cursor is, and your previous clipboard text
+is put back afterwards. Until the permission applies, the text goes to the clipboard.
 
 ## 6. Optional: clean up the text with a local LLM
 
@@ -106,7 +110,7 @@ Settings are not saved: after restarting Dictate they are back to their defaults
 |---|---|
 | "no usable Parakeet model in …" | Step 3 did not finish; run the download again, then restart Dictate. |
 | "… delivered only digital silence; check that this app may use the microphone" | System Settings → Privacy & Security → **Microphone**: switch Dictate on. |
-| "pasting needs the Accessibility permission" | Step 5. The text is on the clipboard; paste it with ⌘V meanwhile. |
+| "Dictate may not paste yet" | Step 5. The text is on the clipboard; paste it with ⌘V meanwhile. |
 | Nothing happens on ⌃⌥Space | Another app may use the same hotkey (e.g. a launcher). Quit it and try again. |
 | A tap stops at once with a Bluetooth headset | The headset's microphone starts slowly, so the tap counts as a hold. Hold the key while you speak instead. |
 | Pasting stopped working after installing a newer version | System Settings → Privacy & Security → Accessibility: remove Dictate (−) and switch it on again. Each build is a new app to macOS. |

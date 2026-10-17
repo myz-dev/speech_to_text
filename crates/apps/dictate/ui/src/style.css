@@ -36,6 +36,22 @@ h2 {
   color: #9a6700;
 }
 
+.notice {
+  margin: 8px 0 16px;
+  padding: 4px 12px 12px;
+  border: 1px solid #9a6700;
+  border-radius: 6px;
+  font-size: 0.9rem;
+}
+
+.notice ol {
+  padding-left: 20px;
+}
+
+.notice button {
+  margin: 4px 8px 0 0;
+}
+
 pre {
   font-size: 0.8rem;
   padding: 8px;

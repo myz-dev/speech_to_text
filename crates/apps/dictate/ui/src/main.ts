@@ -44,6 +44,7 @@ const transcriptText = element("transcript");
 const timings = element("timings");
 const rawText = element("raw");
 const pasteSetting = element("paste") as HTMLInputElement;
+const permissionNotice = element("permission");
 const cleanupSetting = element("cleanup") as HTMLInputElement;
 const languageSetting = element("language") as HTMLSelectElement;
 
@@ -69,8 +70,14 @@ function showTranscript(transcript: Transcript) {
 
 function showSettings(settings: Settings) {
   pasteSetting.checked = settings.paste;
+  showPermissionNotice(settings.paste);
   cleanupSetting.checked = settings.cleanup;
   languageSetting.value = settings.language;
+}
+
+// The steps to allow pasting, while pasting is on but not allowed.
+async function showPermissionNotice(paste: boolean) {
+  permissionNotice.hidden = !paste || (await invoke<boolean>("can_paste"));
 }
 
 // Rust keeps the settings: the window sends all of them on every change and shows
@@ -95,6 +102,10 @@ await listen<Settings>("settings", (event) => showSettings(event.payload));
 const current = await invoke<Status | null>("current_status");
 if (current) showStatus(current);
 showSettings(await invoke<Settings>("settings"));
+element("open-accessibility").addEventListener("click", () =>
+  invoke("request_paste_permission"),
+);
+element("restart").addEventListener("click", () => invoke("restart"));
 for (const input of [pasteSetting, cleanupSetting, languageSetting]) {
   input.addEventListener("change", saveSettings);
 }
