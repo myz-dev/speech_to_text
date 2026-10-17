@@ -15,7 +15,7 @@ use transcription::{Device, Engine, Model};
 
 use crate::gesture::{self, Input, Key, Mode};
 use crate::paste;
-use crate::settings;
+use crate::settings::{self, Settings};
 use crate::status::{self, Status, TranscriptEvent};
 
 /// Engine loaded at start. Parakeet is the faster one (see FINDINGS.md).
@@ -51,7 +51,9 @@ fn run(app: &AppHandle, keys: &Receiver<Key>) {
             continue;
         }
         let pressed = Mode::Pressed { at: Instant::now() };
-        match dictate(app, &mut model, keys, pressed) {
+        // Copied per dictation, so a change applies from the next one.
+        let settings = settings::current(app);
+        match dictate(app, &mut model, keys, pressed, settings) {
             Ok(after) => status::publish(app, after),
             Err(error) => status::publish(app, Status::error(&error)),
         }
@@ -79,15 +81,15 @@ fn missing_model_hint(models: &Path) -> String {
 
 /// Records until the hotkey or the speech detector ends the recording (see [`gesture`]),
 /// transcribes the speech, shows the transcript and pastes it into the focused app, or
-/// only puts it on the clipboard (see [`settings::Settings::paste`]).
+/// only puts it on the clipboard (see [`Settings::paste`]).
 /// A recording without speech ends here. Returns the status to show afterwards.
 fn dictate(
     app: &AppHandle,
     model: &mut Model,
     keys: &Receiver<Key>,
     mut mode: Mode,
+    settings: Settings,
 ) -> anyhow::Result<Status> {
-    let settings = settings::current(app);
     status::publish(app, Status::Recording);
     let mut stopped_at = Instant::now();
     let recording = recording::record_streaming(&Params::default(), |frames| {
