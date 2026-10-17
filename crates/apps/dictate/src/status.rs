@@ -54,6 +54,8 @@ pub struct TranscriptEvent {
     pub audio_secs: f64,
     /// From releasing the hotkey to the text being ready.
     pub stop_to_text_secs: f64,
+    /// Whether the text is pasted; otherwise it is only on the clipboard.
+    pub pasted: bool,
 }
 
 /// The latest published status, kept in the app state.

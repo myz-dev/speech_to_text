@@ -14,6 +14,12 @@ interface Transcript {
   text: string;
   audioSecs: number;
   stopToTextSecs: number;
+  pasted: boolean;
+}
+
+/** Mirrors `Settings` in `src/settings.rs`. */
+interface Settings {
+  paste: boolean;
 }
 
 const LABELS = {
@@ -32,6 +38,7 @@ function element(id: string): HTMLElement {
 const statusLine = element("status");
 const transcriptText = element("transcript");
 const timings = element("timings");
+const pasteSetting = element("paste") as HTMLInputElement;
 
 function showStatus(status: Status) {
   statusLine.textContent =
@@ -47,7 +54,20 @@ function showTranscript(transcript: Transcript) {
   transcriptText.textContent = transcript.text || "(no speech recognized)";
   timings.textContent =
     `${transcript.audioSecs.toFixed(1)} s of audio, ` +
-    `text ready ${transcript.stopToTextSecs.toFixed(2)} s after release`;
+    `text ready ${transcript.stopToTextSecs.toFixed(2)} s after release` +
+    (transcript.pasted ? "" : ", on the clipboard: paste it with ⌘V");
+}
+
+function showSettings(settings: Settings) {
+  pasteSetting.checked = settings.paste;
+}
+
+// The window sends all settings on every change; the Rust side keeps them.
+function saveSettings() {
+  const settings: Settings = { paste: pasteSetting.checked };
+  invoke("set_settings", { settings }).catch((error) =>
+    console.error("cannot save the settings", error),
+  );
 }
 
 // Listen first, then fetch the current status, so no update falls in between.
@@ -55,3 +75,5 @@ await listen<Status>("status", (event) => showStatus(event.payload));
 await listen<Transcript>("transcript", (event) => showTranscript(event.payload));
 const current = await invoke<Status | null>("current_status");
 if (current) showStatus(current);
+showSettings(await invoke<Settings>("settings"));
+pasteSetting.addEventListener("change", saveSettings);

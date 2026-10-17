@@ -15,6 +15,7 @@ use transcription::{Device, Engine, Model};
 
 use crate::gesture::{self, Input, Key, Mode};
 use crate::paste;
+use crate::settings;
 use crate::status::{self, Status, TranscriptEvent};
 
 /// Engine loaded at start. Parakeet is the faster one (see FINDINGS.md).
@@ -77,7 +78,8 @@ fn missing_model_hint(models: &Path) -> String {
 }
 
 /// Records until the hotkey or the speech detector ends the recording (see [`gesture`]),
-/// transcribes the speech, shows the transcript and pastes it into the focused app.
+/// transcribes the speech, shows the transcript and pastes it into the focused app, or
+/// only puts it on the clipboard (see [`settings::Settings::paste`]).
 /// A recording without speech ends here. Returns the status to show afterwards.
 fn dictate(
     app: &AppHandle,
@@ -85,6 +87,7 @@ fn dictate(
     keys: &Receiver<Key>,
     mut mode: Mode,
 ) -> anyhow::Result<Status> {
+    let settings = settings::current(app);
     status::publish(app, Status::Recording);
     let mut stopped_at = Instant::now();
     let recording = recording::record_streaming(&Params::default(), |frames| {
@@ -123,13 +126,19 @@ fn dictate(
             text: transcript.text.clone(),
             audio_secs,
             stop_to_text_secs: stopped_at.elapsed().as_secs_f64(),
+            pasted: settings.paste,
         },
     );
-    if !transcript.text.is_empty() {
-        let previous = paste::paste(&transcript.text)?;
-        if let Err(error) = paste::restore_clipboard(previous) {
-            return Ok(Status::warning(&error));
-        }
+    if transcript.text.is_empty() {
+        return Ok(Status::Idle);
+    }
+    if !settings.paste {
+        paste::copy(&transcript.text)?;
+        return Ok(Status::Idle);
+    }
+    let previous = paste::paste(&transcript.text)?;
+    if let Err(error) = paste::restore_clipboard(previous) {
+        return Ok(Status::warning(&error));
     }
     Ok(Status::Idle)
 }
