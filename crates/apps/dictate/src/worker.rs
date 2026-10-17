@@ -15,6 +15,7 @@ use transcription::{Device, Engine, Model};
 
 use crate::gesture::{self, Input, Key, Mode};
 use crate::paste;
+use crate::settings::{self, Settings};
 use crate::status::{self, Status, TranscriptEvent};
 
 /// Engine loaded at start. Parakeet is the faster one (see FINDINGS.md).
@@ -50,7 +51,9 @@ fn run(app: &AppHandle, keys: &Receiver<Key>) {
             continue;
         }
         let pressed = Mode::Pressed { at: Instant::now() };
-        match dictate(app, &mut model, keys, pressed) {
+        // Copied per dictation, so a change applies from the next one.
+        let settings = settings::current(app);
+        match dictate(app, &mut model, keys, pressed, settings) {
             Ok(after) => status::publish(app, after),
             Err(error) => status::publish(app, Status::error(&error)),
         }
@@ -77,13 +80,15 @@ fn missing_model_hint(models: &Path) -> String {
 }
 
 /// Records until the hotkey or the speech detector ends the recording (see [`gesture`]),
-/// transcribes the speech, shows the transcript and pastes it into the focused app.
+/// transcribes the speech, shows the transcript and pastes it into the focused app, or
+/// only puts it on the clipboard (see [`Settings::paste`]).
 /// A recording without speech ends here. Returns the status to show afterwards.
 fn dictate(
     app: &AppHandle,
     model: &mut Model,
     keys: &Receiver<Key>,
     mut mode: Mode,
+    settings: Settings,
 ) -> anyhow::Result<Status> {
     status::publish(app, Status::Recording);
     let mut stopped_at = Instant::now();
@@ -123,13 +128,19 @@ fn dictate(
             text: transcript.text.clone(),
             audio_secs,
             stop_to_text_secs: stopped_at.elapsed().as_secs_f64(),
+            pasted: settings.paste,
         },
     );
-    if !transcript.text.is_empty() {
-        let previous = paste::paste(&transcript.text)?;
-        if let Err(error) = paste::restore_clipboard(previous) {
-            return Ok(Status::warning(&error));
-        }
+    if transcript.text.is_empty() {
+        return Ok(Status::Idle);
+    }
+    if !settings.paste {
+        paste::copy(&transcript.text)?;
+        return Ok(Status::Idle);
+    }
+    let previous = paste::paste(&transcript.text)?;
+    if let Err(error) = paste::restore_clipboard(previous) {
+        return Ok(Status::warning(&error));
     }
     Ok(Status::Idle)
 }

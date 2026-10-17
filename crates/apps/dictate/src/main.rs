@@ -3,6 +3,7 @@
 
 mod gesture;
 mod paste;
+mod settings;
 mod shortcut;
 mod status;
 mod tray;
@@ -20,7 +21,12 @@ fn main() {
                 .build(),
         )
         .manage(status::Latest::default())
-        .invoke_handler(tauri::generate_handler![status::current_status])
+        .manage(settings::Current::default())
+        .invoke_handler(tauri::generate_handler![
+            status::current_status,
+            settings::settings,
+            settings::set_settings,
+        ])
         .setup(|app| {
             // A menu-bar app: no Dock icon and no menu bar of its own.
             app.set_activation_policy(ActivationPolicy::Accessory);

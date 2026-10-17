@@ -61,6 +61,14 @@ pub fn paste(text: &str) -> anyhow::Result<Option<String>> {
     Ok(previous)
 }
 
+/// Puts `text` on the clipboard for the user to paste with ⌘V. It stays in clipboard
+/// managers' history, unlike the text [`paste`] puts there briefly.
+pub fn copy(text: &str) -> anyhow::Result<()> {
+    Clipboard::new()
+        .and_then(|mut clipboard| clipboard.set_text(text))
+        .context("cannot put the text on the clipboard")
+}
+
 /// Puts `previous` back on the clipboard once the target app has read the pasted text.
 /// Failing here does not undo the paste, so callers report it as a warning.
 pub fn restore_clipboard(previous: Option<String>) -> anyhow::Result<()> {
