@@ -20,6 +20,7 @@ pub enum Status {
     Idle,
     Recording,
     Transcribing,
+    CleaningUp,
     /// Idle after a dictation that worked but had a problem worth showing.
     Warning {
         message: String,
@@ -50,9 +51,12 @@ impl Status {
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct TranscriptEvent {
+    /// The transcript as the speech model produced it.
     pub text: String,
+    /// The text after the cleanup, if it ran and succeeded.
+    pub cleaned: Option<String>,
     pub audio_secs: f64,
-    /// From releasing the hotkey to the text being ready.
+    /// From the end of the recording to the text being ready, including the cleanup.
     pub stop_to_text_secs: f64,
     /// Whether the text is pasted; otherwise it is only on the clipboard.
     pub pasted: bool,

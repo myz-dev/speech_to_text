@@ -907,6 +907,7 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "arboard",
+ "cleanup",
  "objc2-core-graphics",
  "recording",
  "serde",

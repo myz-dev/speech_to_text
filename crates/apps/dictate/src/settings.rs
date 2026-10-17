@@ -16,11 +16,37 @@ pub struct Settings {
     /// Paste the transcript into the focused app. Otherwise it is only put on the
     /// clipboard, which needs no Accessibility permission.
     pub paste: bool,
+    /// Clean up the transcript with a local LLM served by Ollama.
+    pub cleanup: bool,
+    /// The language dictated in. Only the cleanup needs it: Parakeet transcribes any
+    /// language without being told, but does not report which one it heard.
+    pub language: Language,
 }
 
 impl Default for Settings {
     fn default() -> Self {
-        Self { paste: false }
+        Self {
+            paste: false,
+            cleanup: false,
+            language: Language::De,
+        }
+    }
+}
+
+/// A language the cleanup supports, serialized as its ISO 639-1 code.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum Language {
+    De,
+    En,
+}
+
+impl From<Language> for cleanup::Language {
+    fn from(language: Language) -> Self {
+        match language {
+            Language::De => cleanup::Language::German,
+            Language::En => cleanup::Language::English,
+        }
     }
 }
 
