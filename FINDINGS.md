@@ -256,3 +256,14 @@ by a person. Levels are 30 ms RMS in dBFS.
   skipped, or the floor drops to -100 dBFS.
 - Auto-stop adds the 1.2 s hangover to the time from the last word to text; stop to
   text itself was 0.57 s with Whisper.
+
+## App: the Accessibility permission applies only to a new process
+
+Setup: the dmg build, started without the permission, which was then switched on in
+System Settings while Dictate ran.
+
+- `CGPreflightPostEventAccess` kept returning false in the running process: unticking
+  and ticking "Paste automatically" (which checks again) did not change it.
+- After **Restart Dictate** (`AppHandle::restart`) it returned true and pasting worked.
+- So the window has to offer a restart after the permission is granted; checking again
+  in the same process is not enough.

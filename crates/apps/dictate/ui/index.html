@@ -21,10 +21,26 @@
       <label><input type="checkbox" id="paste" /> Paste automatically</label>
       <p class="hint">
         <b>On</b>: You speak, then the text is typed into the app you are using, by pressing ⌘V for you.
-        This needs the Accessibility permission (System Settings → Privacy &amp; Security →
-        Accessibility); macOS asks for it at the first paste. <br>
+        This needs the Accessibility permission; the steps appear here when you switch it
+        on. <br>
         <b>Off</b>: the text is only put on the clipboard, and you paste it yourself with ⌘V.
       </p>
+      <div id="permission" class="notice" hidden>
+        <p><b>Dictate may not paste yet.</b> macOS has to allow it to press ⌘V for you:</p>
+        <ol>
+          <li>
+            Click <b>Open Accessibility settings</b>. If macOS first shows a dialog, choose
+            <b>Open System Settings</b>.
+          </li>
+          <li>In the list, switch on <b>Dictate</b>.</li>
+          <li>
+            Click <b>Restart Dictate</b>: macOS applies the permission only after a restart.
+          </li>
+        </ol>
+        <p>Until then, the text is put on the clipboard for you to paste with ⌘V.</p>
+        <button id="open-accessibility">Open Accessibility settings</button>
+        <button id="restart">Restart Dictate</button>
+      </div>
 
       <label><input type="checkbox" id="cleanup" /> Clean up with a local LLM</label>
       <p class="hint">
