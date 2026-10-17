@@ -12,7 +12,7 @@ use tauri_plugin_global_shortcut::{
     Code, GlobalShortcutExt, Modifiers, Shortcut, ShortcutEvent, ShortcutState,
 };
 
-use crate::worker::Command;
+use crate::gesture::Key;
 
 /// The hotkey as shown to the user; the window's hint repeats it.
 pub const HOTKEY_LABEL: &str = "⌃⌥Space";
@@ -27,11 +27,11 @@ pub fn register(app: &AppHandle) -> Result<(), tauri_plugin_global_shortcut::Err
 /// Handles every registered shortcut. It runs on the main thread, so it only passes
 /// the key state on to the worker.
 pub fn on_shortcut(app: &AppHandle, _shortcut: &Shortcut, event: ShortcutEvent) {
-    let command = match event.state {
-        ShortcutState::Pressed => Command::KeyDown,
-        ShortcutState::Released => Command::KeyUp,
+    let key = match event.state {
+        ShortcutState::Pressed => Key::Down,
+        ShortcutState::Released => Key::Up,
     };
     // Sending fails only if the worker ended, which it does when no model could be
     // loaded; that error is already shown.
-    let _ = app.state::<Sender<Command>>().send(command);
+    let _ = app.state::<Sender<Key>>().send(key);
 }
