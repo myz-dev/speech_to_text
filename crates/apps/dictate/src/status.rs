@@ -20,7 +20,13 @@ pub enum Status {
     Idle,
     Recording,
     Transcribing,
-    Error { message: String },
+    /// Idle after a dictation that worked but had a problem worth showing.
+    Warning {
+        message: String,
+    },
+    Error {
+        message: String,
+    },
 }
 
 impl Status {
@@ -28,6 +34,13 @@ impl Status {
     /// …: cannot read parakeet vocabulary …: No such file or directory".
     pub fn error(error: &anyhow::Error) -> Self {
         Status::Error {
+            message: format!("{error:#}"),
+        }
+    }
+
+    /// A warning status with the whole cause chain, like [`Status::error`].
+    pub fn warning(error: &anyhow::Error) -> Self {
+        Status::Warning {
             message: format!("{error:#}"),
         }
     }

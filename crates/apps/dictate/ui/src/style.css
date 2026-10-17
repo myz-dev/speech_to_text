@@ -27,6 +27,10 @@ h1 {
   color: #d1242f;
 }
 
+#status.warning {
+  color: #9a6700;
+}
+
 #transcript {
   white-space: pre-wrap;
 }

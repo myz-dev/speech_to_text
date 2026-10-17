@@ -60,7 +60,7 @@ pub fn show_status(app: &AppHandle, status: &Status) {
         Status::Recording => Some("●"),
         Status::Transcribing | Status::Loading => Some("…"),
         Status::Error { .. } => Some("!"),
-        Status::Idle => None,
+        Status::Idle | Status::Warning { .. } => None,
     };
     if let Some(tray) = app.tray_by_id(ID)
         && let Err(error) = tray.set_title(title)
