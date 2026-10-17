@@ -36,6 +36,14 @@ h2 {
   color: #9a6700;
 }
 
+pre {
+  font-size: 0.8rem;
+  padding: 8px;
+  background: color-mix(in srgb, GrayText 12%, transparent);
+  border-radius: 4px;
+  user-select: text;
+}
+
 #transcript {
   white-space: pre-wrap;
 }

@@ -21,6 +21,10 @@ use crate::status::{self, Status, TranscriptEvent};
 /// Engine loaded at start. Parakeet is the faster one (see FINDINGS.md).
 const ENGINE: Engine = Engine::Parakeet;
 
+/// Ollama model for the cleanup: the fastest that did not translate or answer
+/// dictated questions in the prototype (see FINDINGS.md).
+const CLEANUP_MODEL: &str = "gemma3:4b";
+
 /// Speech shorter than this is not transcribed; Parakeet rejects very short input.
 const MIN_SPEECH_SECS: f64 = 0.3;
 
@@ -80,8 +84,9 @@ fn missing_model_hint(models: &Path) -> String {
 }
 
 /// Records until the hotkey or the speech detector ends the recording (see [`gesture`]),
-/// transcribes the speech, shows the transcript and pastes it into the focused app, or
-/// only puts it on the clipboard (see [`Settings::paste`]).
+/// transcribes the speech, cleans it up if [`Settings::cleanup`] is on, shows the text
+/// and pastes it into the focused app, or only puts it on the clipboard (see
+/// [`Settings::paste`]).
 /// A recording without speech ends here. Returns the status to show afterwards.
 fn dictate(
     app: &AppHandle,
@@ -90,6 +95,11 @@ fn dictate(
     mut mode: Mode,
     settings: Settings,
 ) -> anyhow::Result<Status> {
+    if settings.cleanup {
+        // Loading takes ~1.7 s when the model is not in memory; do it while recording.
+        // A failure shows up again when cleaning.
+        thread::spawn(|| cleanup::load(CLEANUP_MODEL));
+    }
     status::publish(app, Status::Recording);
     let mut stopped_at = Instant::now();
     let recording = recording::record_streaming(&Params::default(), |frames| {
@@ -120,27 +130,49 @@ fn dictate(
     }
 
     status::publish(app, Status::Transcribing);
-    let transcript = model.transcribe(samples, None)?;
+    let raw = model.transcribe(samples, None)?.text;
+
+    // A failed cleanup still delivers the raw text, with a warning.
+    let mut warning = None;
+    let cleaned = if settings.cleanup && !raw.is_empty() {
+        status::publish(app, Status::CleaningUp);
+        match cleanup::clean(CLEANUP_MODEL, &raw, settings.language.into()) {
+            Ok(cleaned) => Some(cleaned),
+            Err(error) => {
+                let error = anyhow::Error::new(error)
+                    .context("the cleanup failed, so the text is the raw transcript");
+                warning = Some(error);
+                None
+            }
+        }
+    } else {
+        None
+    };
+    let text = cleaned.clone().unwrap_or_else(|| raw.clone());
+
     // Shown before pasting, so the text is visible even if pasting fails.
     status::publish_transcript(
         app,
         TranscriptEvent {
-            text: transcript.text.clone(),
+            text: raw,
+            cleaned,
             audio_secs,
             stop_to_text_secs: stopped_at.elapsed().as_secs_f64(),
             pasted: settings.paste,
         },
     );
-    if transcript.text.is_empty() {
+    // No words were heard, or the cleanup removed them all (a lone "ähm"). Pasting or
+    // copying "" would replace the user's clipboard with nothing.
+    if text.is_empty() {
         return Ok(Status::Idle);
     }
-    if !settings.paste {
-        paste::copy(&transcript.text)?;
-        return Ok(Status::Idle);
+    if settings.paste {
+        let previous = paste::paste(&text)?;
+        if let Err(error) = paste::restore_clipboard(previous) {
+            warning.get_or_insert(error);
+        }
+    } else {
+        paste::copy(&text)?;
     }
-    let previous = paste::paste(&transcript.text)?;
-    if let Err(error) = paste::restore_clipboard(previous) {
-        return Ok(Status::warning(&error));
-    }
-    Ok(Status::Idle)
+    Ok(warning.map_or(Status::Idle, |error| Status::warning(&error)))
 }

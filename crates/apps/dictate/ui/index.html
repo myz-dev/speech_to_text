@@ -14,6 +14,7 @@
       </p>
       <p id="status">Starting…</p>
       <p id="transcript"></p>
+      <p id="raw" class="hint"></p>
       <p id="timings" class="hint"></p>
 
       <h2>Settings</h2>
@@ -23,6 +24,30 @@
         This needs the Accessibility permission (System Settings → Privacy &amp; Security →
         Accessibility); macOS asks for it at the first paste. <br>
         <b>Off</b>: the text is only put on the clipboard, and you paste it yourself with ⌘V.
+      </p>
+
+      <label><input type="checkbox" id="cleanup" /> Clean up with a local LLM</label>
+      <p class="hint">
+        Removes hesitations (ähm, uh), fixes punctuation and recognition errors with
+        gemma3:4b in Ollama (ollama.com), on this Mac.
+        It adds about 1–2 s. The cleanup can change meaning, so the raw transcript stays
+        visible below the cleaned text. If Ollama cannot be reached, the raw text is used.
+        Setup, once:
+      </p>
+      <pre>brew install ollama   # or the app from ollama.com
+ollama serve          # unless the Ollama app is running
+ollama pull gemma3:4b</pre>
+
+      <label>
+        Language
+        <select id="language">
+          <option value="de">Deutsch</option>
+          <option value="en">English</option>
+        </select>
+      </label>
+      <p class="hint">
+        The language you dictate in. Only the cleanup needs it: told nothing, the model
+        may translate the text.
       </p>
     </main>
   </body>

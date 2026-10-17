@@ -6,12 +6,13 @@ import { listen } from "@tauri-apps/api/event";
 
 /** Mirrors `Status` in `src/status.rs`. */
 type Status =
-  | { state: "loading" | "idle" | "recording" | "transcribing" }
+  | { state: "loading" | "idle" | "recording" | "transcribing" | "cleaningup" }
   | { state: "warning" | "error"; message: string };
 
 /** Mirrors `TranscriptEvent` in `src/status.rs`. */
 interface Transcript {
   text: string;
+  cleaned: string | null;
   audioSecs: number;
   stopToTextSecs: number;
   pasted: boolean;
@@ -20,6 +21,8 @@ interface Transcript {
 /** Mirrors `Settings` in `src/settings.rs`. */
 interface Settings {
   paste: boolean;
+  cleanup: boolean;
+  language: "de" | "en";
 }
 
 const LABELS = {
@@ -27,6 +30,7 @@ const LABELS = {
   idle: "Ready",
   recording: "Recording…",
   transcribing: "Transcribing…",
+  cleaningup: "Cleaning up…",
 } as const;
 
 function element(id: string): HTMLElement {
@@ -38,7 +42,10 @@ function element(id: string): HTMLElement {
 const statusLine = element("status");
 const transcriptText = element("transcript");
 const timings = element("timings");
+const rawText = element("raw");
 const pasteSetting = element("paste") as HTMLInputElement;
+const cleanupSetting = element("cleanup") as HTMLInputElement;
+const languageSetting = element("language") as HTMLSelectElement;
 
 function showStatus(status: Status) {
   statusLine.textContent =
@@ -51,21 +58,29 @@ function showStatus(status: Status) {
 }
 
 function showTranscript(transcript: Transcript) {
-  transcriptText.textContent = transcript.text || "(no speech recognized)";
+  const text = transcript.cleaned ?? transcript.text;
+  transcriptText.textContent = text || "(no words recognized)";
+  rawText.textContent = transcript.cleaned === null ? "" : `Raw: ${transcript.text}`;
   timings.textContent =
     `${transcript.audioSecs.toFixed(1)} s of audio, ` +
     `text ready ${transcript.stopToTextSecs.toFixed(2)} s after release` +
-    (transcript.pasted ? "" : ", on the clipboard: paste it with ⌘V");
+    (transcript.pasted || !text ? "" : ", on the clipboard: paste it with ⌘V");
 }
 
 function showSettings(settings: Settings) {
   pasteSetting.checked = settings.paste;
+  cleanupSetting.checked = settings.cleanup;
+  languageSetting.value = settings.language;
 }
 
 // Rust keeps the settings: the window sends all of them on every change and shows
 // what comes back in the `settings` event. If sending fails, it shows Rust's again.
 function saveSettings() {
-  const settings: Settings = { paste: pasteSetting.checked };
+  const settings: Settings = {
+    paste: pasteSetting.checked,
+    cleanup: cleanupSetting.checked,
+    language: languageSetting.value === "en" ? "en" : "de",
+  };
   invoke("set_settings", { settings }).catch(async (error) => {
     console.error("cannot save the settings", error);
     showSettings(await invoke<Settings>("settings"));
@@ -80,4 +95,6 @@ await listen<Settings>("settings", (event) => showSettings(event.payload));
 const current = await invoke<Status | null>("current_status");
 if (current) showStatus(current);
 showSettings(await invoke<Settings>("settings"));
-pasteSetting.addEventListener("change", saveSettings);
+for (const input of [pasteSetting, cleanupSetting, languageSetting]) {
+  input.addEventListener("change", saveSettings);
+}

@@ -10,6 +10,7 @@ tauri-build.workspace = true
 [dependencies]
 anyhow.workspace = true
 arboard.workspace = true
+cleanup.workspace = true
 objc2-core-graphics.workspace = true
 recording.workspace = true
 serde.workspace = true

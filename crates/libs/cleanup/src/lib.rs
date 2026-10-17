@@ -2,10 +2,17 @@
 //!
 //! See [PLAN.md](../../../PLAN.md).
 
+use std::time::Duration;
+
 use serde::{Deserialize, Serialize};
 
 /// Address of the local Ollama server.
 pub const OLLAMA_URL: &str = "http://localhost:11434";
+
+/// Longest wait for one Ollama request, including reading the reply: a cold model load
+/// (~2 s for gemma3:4b) plus cleaning a long dictation (~2 s for 70 words), with a wide
+/// margin. Without it, a hung Ollama blocks the caller forever.
+const REQUEST_TIMEOUT: Duration = Duration::from_secs(30);
 
 /// Language of a transcript, and of the cleaned text.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -78,6 +85,8 @@ pub enum CleanError {
          use a non-thinking variant such as qwen3:4b-instruct"
     )]
     ThinkingModel { model: String },
+    #[error("ollama did not answer within {} s for {model}", REQUEST_TIMEOUT.as_secs())]
+    Timeout { model: String },
 }
 
 /// Cleans up `transcript`, spoken in `language`, with the Ollama model `model` (e.g.
@@ -130,9 +139,13 @@ fn chat(model: &str, messages: &[Message]) -> Result<String, CleanError> {
         .config()
         // Read Ollama's error message from the body instead of getting a bare status.
         .http_status_as_error(false)
+        .timeout_global(Some(REQUEST_TIMEOUT))
         .build()
         .send_json(&request)
-        .map_err(CleanError::Unreachable)?;
+        .map_err(|error| match error {
+            ureq::Error::Timeout(_) => timed_out(model),
+            error => CleanError::Unreachable(error),
+        })?;
 
     let status = response.status().as_u16();
     if status != 200 {
@@ -148,14 +161,25 @@ fn chat(model: &str, messages: &[Message]) -> Result<String, CleanError> {
         });
     }
 
-    let response = response
-        .body_mut()
-        .read_json::<ChatResponse>()
-        .map_err(|source| CleanError::Response {
-            model: model.to_owned(),
-            source,
-        })?;
+    let response =
+        response
+            .body_mut()
+            .read_json::<ChatResponse>()
+            .map_err(|source| match source {
+                // The timeout covers reading the reply too.
+                ureq::Error::Timeout(_) => timed_out(model),
+                source => CleanError::Response {
+                    model: model.to_owned(),
+                    source,
+                },
+            })?;
     Ok(response.message.content)
+}
+
+fn timed_out(model: &str) -> CleanError {
+    CleanError::Timeout {
+        model: model.to_owned(),
+    }
 }
 
 /// Body of `POST /api/chat`.

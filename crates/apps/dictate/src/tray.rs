@@ -58,7 +58,7 @@ fn show_main_window(app: &AppHandle) {
 pub fn show_status(app: &AppHandle, status: &Status) {
     let title = match status {
         Status::Recording => Some("●"),
-        Status::Transcribing | Status::Loading => Some("…"),
+        Status::Transcribing | Status::CleaningUp | Status::Loading => Some("…"),
         Status::Error { .. } => Some("!"),
         Status::Idle | Status::Warning { .. } => None,
     };
