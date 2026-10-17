@@ -16,7 +16,7 @@
         "title": "Dictate",
         "width": 460,
         "height": 640,
-        "visible": true
+        "visible": false
       }
     ]
   },

@@ -43,7 +43,8 @@ fn on_menu_event(app: &AppHandle, event: MenuEvent) {
     }
 }
 
-fn show_main_window(app: &AppHandle) {
+/// Shows the window and brings it to the front.
+pub fn show_main_window(app: &AppHandle) {
     let Some(window) = app.get_webview_window("main") else {
         return;
     };

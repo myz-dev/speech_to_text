@@ -30,7 +30,8 @@ time:
 
 macOS remembers this; later launches open normally. Dictate opens its window and puts
 an icon in the menu bar. Closing the window only hides it: Dictate keeps running in the
-menu bar (icon → **Show Dictate** brings the window back, **Quit Dictate** ends it).
+menu bar. Opening Dictate again (from Applications, Spotlight or a launcher) or
+icon → **Show Dictate** brings the window back; icon → **Quit Dictate** ends it.
 Until the model is downloaded, the window shows "no usable Parakeet model"; that is
 expected.
 

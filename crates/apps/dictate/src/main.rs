@@ -9,7 +9,7 @@ mod status;
 mod tray;
 mod worker;
 
-use tauri::{ActivationPolicy, Manager, WindowEvent};
+use tauri::{ActivationPolicy, Manager, RunEvent, WindowEvent};
 
 use crate::status::Status;
 
@@ -31,6 +31,10 @@ fn main() {
             // A menu-bar app: no Dock icon and no menu bar of its own.
             app.set_activation_policy(ActivationPolicy::Accessory);
             tray::create(app.handle())?;
+            // The window starts hidden and is shown here: a menu-bar app is not brought
+            // to the front when it starts, so a window shown by the config alone ends up
+            // behind the app that launched it.
+            tray::show_main_window(app.handle());
             match shortcut::register(app.handle()) {
                 Ok(()) => {
                     app.manage(worker::spawn(app.handle().clone()));
@@ -55,6 +59,13 @@ fn main() {
                 }
             }
         })
-        .run(tauri::generate_context!())
-        .expect("the Tauri event loop failed to start");
+        .build(tauri::generate_context!())
+        .expect("the Tauri app failed to build")
+        .run(|app, event| {
+            // Launching the app again while it runs (Finder, Spotlight, Raycast) only
+            // sends it this event; show the window, as a Mac app does.
+            if let RunEvent::Reopen { .. } = event {
+                tray::show_main_window(app);
+            }
+        });
 }
