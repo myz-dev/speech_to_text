@@ -6,7 +6,7 @@ the internet.
 
 You need:
 - a Mac with Apple silicon (M1 or newer); tested on macOS 26
-- about 1 GB of free disk space
+- about 1 GB of free disk space (7 GB if you enable cleanup and download ministral-3:8b)
 - the file `Dictate_0.1.0_aarch64.dmg`
 
 Setup takes about 10 minutes, most of it the model download.
