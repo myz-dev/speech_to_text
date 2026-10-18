@@ -124,9 +124,9 @@ under rules in [AGENTS.md](AGENTS.md) and checked by a human:
   with the prototype and recorded in [FINDINGS.md](FINDINGS.md).
 - **Corrections.** For example:
   - The AI first trimmed with its own speech analysis, which turned typing into "Vielen
-    Dank". Now one set of measured levels serves both decisions (44fbf50).
+    Dank". Now one set of measured levels serves both decisions (2373096).
   - It read the AGENTS.md rule against stateful methods as "only free functions"; I
-    rewrote the rule to prefer idiomatic Rust (400ae65).
+    rewrote the rule to prefer idiomatic Rust (c7fd278).
   - A review found that mapping frames to 16 kHz drifted at 22.05 kHz.
 
 ## Repository
