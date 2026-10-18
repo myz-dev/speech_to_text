@@ -5,7 +5,8 @@
 
 use cleanup::{CleanError, Language, OLLAMA_URL, clean, load};
 
-const MODELS: [&str; 2] = ["gemma3:4b", "qwen3:4b-instruct"];
+/// The model the app and the prototype use by default.
+const MODELS: [&str; 1] = ["ministral-3:8b"];
 
 /// True if Ollama runs and has `model`; prints why a test is skipped otherwise.
 fn available(model: &str) -> bool {
@@ -158,6 +159,70 @@ fn removes_english_hesitations() {
                 "{model}: {kept} missing: {cleaned}"
             );
         }
+    }
+}
+
+/// The output is pasted into other apps, where Markdown shows up as literal characters.
+fn assert_plain_text(model: &str, cleaned: &str) {
+    assert!(
+        !cleaned.contains("**") && !cleaned.contains('`'),
+        "{model} wrote Markdown: {cleaned}"
+    );
+}
+
+fn digits(text: &str) -> String {
+    text.chars().filter(char::is_ascii_digit).collect()
+}
+
+#[test]
+fn keeps_only_the_corrected_version_of_a_self_correction() {
+    let transcript = "können wir das meeting auf dienstag um drei verschieben nein warte \
+                      dienstag geht nicht lieber mittwoch um drei";
+    for (model, cleaned) in clean_with_models(transcript, Language::German) {
+        assert!(!has_word(&cleaned, "dienstag"), "{model}: {cleaned}");
+        assert!(has_word(&cleaned, "mittwoch"), "{model}: {cleaned}");
+    }
+}
+
+#[test]
+fn writes_a_spoken_enumeration_as_a_numbered_list() {
+    let transcript = "für morgen habe ich drei aufgaben erstens die rechnung an die firma \
+                      schneider schicken zweitens den zahnarzttermin absagen und drittens \
+                      die präsentation fertig machen";
+    for (model, cleaned) in clean_with_models(transcript, Language::German) {
+        let items: Vec<&str> = cleaned
+            .lines()
+            .filter(|line| line.trim_start().starts_with(['1', '2', '3']))
+            .collect();
+        assert_eq!(items.len(), 3, "{model}: {cleaned}");
+        assert!(items[2].contains("Präsentation"), "{model}: {cleaned}");
+        assert_plain_text(model, &cleaned);
+    }
+}
+
+#[test]
+fn writes_amounts_the_german_way_without_changing_digits() {
+    let transcript = "die rechnung über 1250 euro und 80 cent ist am 3. november fällig \
+                      ruf mich bei fragen unter 0171 234 5678 an";
+    for (model, cleaned) in clean_with_models(transcript, Language::German) {
+        assert!(cleaned.contains("1.250,80"), "{model}: {cleaned}");
+        assert!(
+            digits(&cleaned).contains("01712345678"),
+            "{model}: {cleaned}"
+        );
+        assert_plain_text(model, &cleaned);
+    }
+}
+
+#[test]
+fn writes_a_spoken_email_address() {
+    let transcript = "seine e-mail-adresse ist t punkt schmid at kanzlei minus berg punkt de";
+    for (model, cleaned) in clean_with_models(transcript, Language::German) {
+        assert!(
+            cleaned.contains("t.schmid@kanzlei-berg.de"),
+            "{model}: {cleaned}"
+        );
+        assert_plain_text(model, &cleaned);
     }
 }
 

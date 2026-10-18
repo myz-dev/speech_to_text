@@ -20,7 +20,7 @@ pub mod transcribe;
 pub use transcription::{PARAKEET_MODEL_DIR, WHISPER_MODEL_FILE};
 
 /// Ollama model used for cleanup unless `--model` names another.
-pub const DEFAULT_CLEANUP_MODEL: &str = "gemma3:4b";
+pub const DEFAULT_CLEANUP_MODEL: &str = "ministral-3:8b";
 
 /// Prototype for local voice-to-text: record, transcribe, clean up, benchmark.
 #[derive(Debug, Parser)]

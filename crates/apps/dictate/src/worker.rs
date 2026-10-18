@@ -21,9 +21,9 @@ use crate::status::{self, Status, TranscriptEvent};
 /// Engine loaded at start. Parakeet is the faster one (see FINDINGS.md).
 const ENGINE: Engine = Engine::Parakeet;
 
-/// Ollama model for the cleanup: the fastest that did not translate or answer
-/// dictated questions in the prototype (see FINDINGS.md).
-const CLEANUP_MODEL: &str = "gemma3:4b";
+/// Ollama model for the cleanup: the smallest that follows every rule of the cleanup
+/// prompt without changing numbers (see FINDINGS.md).
+const CLEANUP_MODEL: &str = "ministral-3:8b";
 
 /// Speech shorter than this is not transcribed; Parakeet rejects very short input.
 const MIN_SPEECH_SECS: f64 = 0.3;

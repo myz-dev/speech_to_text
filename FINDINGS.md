@@ -267,3 +267,28 @@ System Settings while Dictate ran.
 - After **Restart Dictate** (`AppHandle::restart`) it returned true and pasting worked.
 - So the window has to offer a restart after the permission is granted; checking again
   in the same process is not enough.
+
+## Cleanup: rules in the prompt, and ministral-3:8b
+
+Setup: trials with dictated German and English samples covering hesitations,
+self-corrections, spoken lists, amounts and phone numbers, legal sections, email
+addresses, letters and dictated questions; local models via Ollama at temperature 0 on
+an M4 Pro (24 GB).
+
+- **"Keep every word that carries meaning" blocks the useful edits.** With it alone,
+  models keep the retracted part of a self-correction ("Dienstag, nein, warte,
+  Mittwoch") and never write a spoken enumeration as a list. The prompt names each edit
+  as a rule: self-corrections, enumerations, writing numbers and units, spoken email
+  addresses, greeting and sign-off lines.
+- **4B models do not follow the longer prompt reliably.** qwen3:4b-instruct changed
+  digits of a dictated phone number, with and without the rule on numbers; gemma3:4b
+  answered dictated questions on some transcripts. ministral-3:8b followed the rules and
+  changed no number, so it is the default model (6 GB download, Apache 2.0).
+- **Speed is that of the 4B models.** About 1 s for a short dictation and 1.8 s for 70
+  words with the model loaded; loading takes ~1 s from the disk cache.
+- **ministral-3:8b sometimes writes Markdown bold or code markers** despite "plain text
+  without Markdown"; `clean` removes `**` and `` ` `` from its reply.
+- **Open:** it sometimes tightens wording beyond the rules: "äh also ich wollte ähm nur
+  kurz sagen dass das meeting morgen äh auf drei uhr verschoben ist" became "Das Meeting
+  ist morgen um drei Uhr verschoben." The cleanup also cannot restore words the
+  speech-to-text dropped.

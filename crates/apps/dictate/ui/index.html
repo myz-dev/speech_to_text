@@ -44,15 +44,16 @@
 
       <label><input type="checkbox" id="cleanup" /> Clean up with a local LLM</label>
       <p class="hint">
-        Removes hesitations (ähm, uh), fixes punctuation and recognition errors with
-        gemma3:4b in Ollama (ollama.com), on this Mac.
+        Removes hesitations (ähm, uh) and retracted words, writes spoken lists, numbers and
+        email addresses the way they are written, with ministral-3:8b in Ollama
+        (ollama.com), on this Mac.
         It adds about 1–2 s. The cleanup can change meaning, so the raw transcript stays
         visible below the cleaned text. If Ollama cannot be reached, the raw text is used.
         Setup, once:
       </p>
       <pre>brew install ollama   # or the app from ollama.com
 ollama serve          # unless the Ollama app is running
-ollama pull gemma3:4b</pre>
+ollama pull ministral-3:8b</pre>
 
       <label>
         Language
