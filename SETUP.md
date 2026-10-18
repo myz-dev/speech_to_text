@@ -28,6 +28,16 @@ time:
    password or Touch ID.
 3. Click **Open** in the dialog that follows.
 
+If macOS says the app "is damaged", or **Open Anyway** does not appear (it shows only
+for about an hour after a blocked launch), remove the download mark in Terminal and
+open Dictate again:
+
+```bash
+xattr -dr com.apple.quarantine /Applications/Dictate.app
+```
+
+This affects only Dictate; macOS keeps checking every other app.
+
 macOS remembers this; later launches open normally. Dictate opens its window and puts
 an icon in the menu bar. Closing the window only hides it: Dictate keeps running in the
 menu bar. Opening Dictate again (from Applications, Spotlight or a launcher) or
@@ -118,8 +128,16 @@ Settings are not saved: after restarting Dictate they are back to their defaults
 
 ## Uninstall
 
-Quit Dictate, delete it from Applications, and delete the model:
+Quit Dictate, delete it from Applications, then delete the model and the permissions
+you gave it (microphone, Accessibility):
 
 ```bash
 rm -rf "$HOME/Library/Application Support/local.dictate"
+tccutil reset All local.dictate
+```
+
+If you downloaded the cleanup model only for Dictate, remove it too (about 6 GB):
+
+```bash
+ollama rm ministral-3:8b
 ```
