@@ -91,11 +91,12 @@ is put back afterwards. Until the permission applies, the text goes to the clipb
 ## 6. Optional: clean up the text with a local LLM
 
 The speech model already writes punctuated sentences. The cleanup additionally removes
-hesitations ("ähm", "uh") and false starts, using a language model on your Mac. It adds
-about 1–2 s per dictation.
+hesitations ("ähm", "uh"), false starts and retracted words ("Dienstag, nein, Mittwoch"),
+and writes spoken lists, amounts and email addresses the way they are written, using a
+language model on your Mac. It adds about 1–2 s per dictation.
 
 1. Install [Ollama](https://ollama.com) (the app, or `brew install ollama`) and start it.
-2. In Terminal: `ollama pull gemma3:4b` (about 3 GB).
+2. In Terminal: `ollama pull ministral-3:8b` (about 6 GB).
 3. In the Dictate window, tick **Clean up with a local LLM** and choose the language
    you dictate in (Deutsch or English).
 
