@@ -171,6 +171,8 @@ The most obvious ways forward for this project would be:
 - refining the cleanup: tuning the prompt has shown big improvements already; rule-based
   steps could improve it further and in some cases skip the LLM call
 - UI/UX improvements and persistent settings
+- user-facing error messages with an action ("start the Ollama app") instead of the
+  raw cause chain, and a log file, so errors outlive the next status
 
 ## Related work
 
