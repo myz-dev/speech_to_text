@@ -9,6 +9,7 @@ mod status;
 mod tray;
 mod worker;
 
+use anyhow::Context;
 use tauri::{ActivationPolicy, Manager, RunEvent, WindowEvent};
 
 use crate::status::Status;
@@ -27,7 +28,6 @@ fn main() {
                 .build(),
         )
         .manage(status::Latest::default())
-        .manage(settings::Current::default())
         .invoke_handler(tauri::generate_handler![
             status::current_status,
             settings::settings,
@@ -37,6 +37,21 @@ fn main() {
             restart,
         ])
         .setup(|app| {
+            let settings_path =
+                settings::path(app.handle()).context("cannot find the app's config directory")?;
+            // Unreadable settings do not stop the app: it starts with the defaults, which
+            // the next change overwrites, and the worker shows why as a warning.
+            let (saved, settings_warning) = match settings::Settings::load(&settings_path) {
+                Ok(saved) => (saved.unwrap_or_default(), None),
+                Err(error) => (
+                    settings::Settings::default(),
+                    Some(anyhow::Error::new(error).context("using the default settings")),
+                ),
+            };
+            // Registered here, after the window exists, which is safe: the window's
+            // commands are answered on the main thread, so none runs before setup returns.
+            app.manage(settings::Current::new(settings_path, saved));
+
             // A menu-bar app: no Dock icon and no menu bar of its own.
             app.set_activation_policy(ActivationPolicy::Accessory);
             tray::create(app.handle())?;
@@ -46,7 +61,7 @@ fn main() {
             tray::show_main_window(app.handle());
             match shortcut::register(app.handle()) {
                 Ok(()) => {
-                    app.manage(worker::spawn(app.handle().clone()));
+                    app.manage(worker::spawn(app.handle().clone(), settings_warning));
                 }
                 Err(error) => {
                     let error = anyhow::Error::new(error).context(format!(
@@ -54,6 +69,10 @@ fn main() {
                         shortcut::HOTKEY_LABEL
                     ));
                     status::publish(app.handle(), Status::error(&error));
+                    // Without the worker the settings warning is never shown; log it.
+                    if let Some(warning) = settings_warning {
+                        eprintln!("{warning:#}");
+                    }
                 }
             }
             Ok(())

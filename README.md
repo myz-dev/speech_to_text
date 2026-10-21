@@ -97,7 +97,6 @@ fails, the raw transcript displayed to the user as a fallback.
 - Loud typing while speaking keeps a recording open until the typing stops.
 - With slow microphones (some Bluetooth headsets), a tap can count as a hold.
 - Each new build needs the Accessibility permission again (ad-hoc signing).
-- Settings are not saved; they reset when the app restarts.
 
 ## Trade-offs
 
@@ -170,7 +169,7 @@ The most obvious ways forward for this project would be:
 - detecting the spoken language, so the cleanup no longer needs the language setting
 - refining the cleanup: tuning the prompt has shown big improvements already; rule-based
   steps could improve it further and in some cases skip the LLM call
-- UI/UX improvements and persistent settings
+- UI/UX improvements
 - user-facing error messages with an action ("start the Ollama app") instead of the
   raw cause chain, and a log file, so errors outlive the next status
 
