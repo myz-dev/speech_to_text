@@ -292,3 +292,44 @@ an M4 Pro (24 GB).
   kurz sagen dass das meeting morgen äh auf drei uhr verschoben ist" became "Das Meeting
   ist morgen um drei Uhr verschoben." The cleanup also cannot restore words the
   speech-to-text dropped.
+
+## App: Silero VAD against coughs and typing
+
+Setup: Silero VAD v6.2 (`recording::vad`, CPU, 32 ms chunks at 16 kHz) and the energy
+detector (`silence`, default `Params`) on the same files: the 18 dictation fixtures and
+10 noise recordings, built-in MacBook Pro microphone, quiet room, one speaker. Each file
+starts with about 1 s of room silence. "Run" is the most chunks in a row above a
+probability.
+
+| Recording | Energy detector | Silero: peak, longest run at 0.5 / 0.9 | Parakeet / Whisper |
+|---|---|---|---|
+| `cough` (several coughs) | speech started twice | 0.90, 10 / 1 | "" / "*hums*" |
+| `cough-2` (single coughs, 2 s apart) | started 6 times | 0.56, 2 / 0 | "" / "Ahem. Ahem. …" |
+| `cough-3` (two coughing fits) | started twice | 0.65, 3 / 0 | "" / "*hums*" |
+| `throat-clear` (4 times "ähem") | started 4 times | 0.98, 30 / 11 | "" / "\*ahem\*" |
+| `typing` (fast typing) | started at 0.6 s | 0.08, 0 / 0 | "" / "Vielen Dank." |
+| `typing-speech` (typing, then a sentence while typing) | started, never ended | 1.00, 141 / 137 | – |
+| `speech-cough` (sentence, 2 s, cough) | started again at the cough | the cough: 0.93, 14 / 2 | – |
+| `word-ja`, `word-nein`, `word-okay` | started | 1.00, 9–13 / 7–10 | – |
+| 18 dictation fixtures | started | 1.00, 18–188 / ≥ 17 | – |
+
+- **A probability threshold of 0.5 does not reject coughs:** one cough stayed above it
+  for 10 chunks (320 ms), longer than the 9 chunks of "Ja." At 0.9 the longest cough
+  run is 2 chunks and the shortest word's 7. `vad::Params` starts speech after 4 chunks
+  above 0.9 (128 ms) and ends it after 1.2 s below 0.5. On all 28 files this rejects every
+  cough and the typing, starts on every word and dictation, and does not restart at the
+  cough after speech. An end threshold of 0.75 gave the same events.
+- **Clearing the throat is speech to Silero** (voiced, 11 chunks above 0.9): it still
+  starts speech. Rejecting it would need a start run longer than the shortest word.
+- **Typing alone started the energy detector** at 0.6 s; in the take of "silence
+  detection on the built-in microphone" it did not. It never started Silero (peak 0.08).
+- **Parakeet writes no text for coughs, throat-clearing or typing; Whisper invents
+  some.** With Parakeet, a false start costs timing, not text: in tap mode, a cough
+  followed by more than 1.2 s of quiet ends the recording before the speech, and typing
+  keeps it open.
+- **Starting later costs no words:** Silero starts 0.06–0.16 s after the energy detector
+  on the dictations (1.0 s on one), but the recording runs from the key press and the
+  trimming keeps padding before the first speech.
+- Silero takes 0.09 ms per 32 ms chunk on the CPU.
+- **Open:** one speaker, one room, a few takes of each noise. A pause of more than 1.2 s
+  inside a dictation ends speech with both detectors (`zahlen`).

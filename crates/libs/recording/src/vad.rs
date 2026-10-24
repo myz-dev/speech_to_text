@@ -6,6 +6,11 @@
 //! for each chunk the probability that it holds speech. It is recurrent: each chunk is
 //! judged together with what came before, which the model returns as a [`State`] that
 //! is passed into the next [`Vad::step`].
+//!
+//! [`decide`] turns the probabilities into the events of the energy detector
+//! ([`Event`]): speech starts after a few chunks of high probability and ends after a
+//! hangover of lower ones. The thresholds come from recordings of speech, coughs,
+//! throat-clearing and typing (FINDINGS.md, "Silero VAD against coughs and typing").
 
 use std::path::{Path, PathBuf};
 
@@ -13,9 +18,18 @@ use ort::session::Session;
 use ort::value::TensorRef;
 
 use crate::SAMPLE_RATE;
+use crate::silence::Event;
 
 /// Samples judged per step: 32 ms at 16 kHz, the chunk length the model is trained on.
 pub const CHUNK_SAMPLES: usize = 512;
+
+/// Length of one chunk in milliseconds.
+pub const CHUNK_MS: u32 = 32;
+
+/// Whole chunks in `ms` milliseconds.
+pub const fn chunks(ms: u32) -> u32 {
+    ms / CHUNK_MS
+}
 
 /// Samples of the previous chunk put before each chunk, so the graph reads 576 samples
 /// per step. It needs them: given a chunk of 512 samples alone, it returns a probability
@@ -156,6 +170,113 @@ fn output<const N: usize>(
     })
 }
 
+/// When the speech probabilities count as speech. Durations are in chunks of
+/// [`CHUNK_MS`].
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Params {
+    /// A chunk above this probability may start speech. High, because a cough scores
+    /// up to 0.9 for a few chunks; speech scores above it for hundreds of milliseconds.
+    pub start_probability: f32,
+    /// Speech continues while chunks stay at or above this probability. Lower than the
+    /// start, so a probability near the start does not toggle between speech and
+    /// silence, and quiet word endings do not run down the hangover.
+    pub end_probability: f32,
+    /// Chunks in a row above [`Params::start_probability`] before speech counts. Coughs
+    /// stay above it for at most 2 chunks, a single short word ("Ja.") for 7.
+    pub start_chunks: u32,
+    /// Chunks in a row below [`Params::end_probability`] before speech has ended.
+    pub hangover_chunks: u32,
+    /// Chunks without any speech before [`Event::NoSpeechTimeout`].
+    pub no_speech_chunks: u32,
+}
+
+impl Default for Params {
+    fn default() -> Self {
+        Self {
+            start_probability: 0.9,
+            end_probability: 0.5,
+            start_chunks: 4,
+            hangover_chunks: chunks(1_200),
+            no_speech_chunks: chunks(10_000),
+        }
+    }
+}
+
+/// State of the speech decision, passed into [`decide`] and returned by it.
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub struct Detector {
+    phase: Phase,
+    chunks_seen: u32,
+    heard_speech: bool,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq)]
+enum Phase {
+    /// `likely_run` chunks in a row were above the start probability.
+    Silence { likely_run: u32 },
+    /// `unlikely_run` chunks in a row were below the end probability.
+    Speech { unlikely_run: u32 },
+}
+
+impl Default for Phase {
+    fn default() -> Self {
+        Phase::Silence { likely_run: 0 }
+    }
+}
+
+impl Detector {
+    /// Whether [`Event::SpeechStarted`] has been reported.
+    pub fn heard_speech(&self) -> bool {
+        self.heard_speech
+    }
+}
+
+/// Feeds the speech probability of the next chunk to the detector, and reports when
+/// speech starts and ends.
+pub fn decide(detector: Detector, probability: f32, params: &Params) -> (Detector, Option<Event>) {
+    let (phase, mut event) = match detector.phase {
+        Phase::Silence { likely_run } => {
+            let likely_run = if probability > params.start_probability {
+                likely_run + 1
+            } else {
+                0
+            };
+            if likely_run >= params.start_chunks {
+                (
+                    Phase::Speech { unlikely_run: 0 },
+                    Some(Event::SpeechStarted),
+                )
+            } else {
+                (Phase::Silence { likely_run }, None)
+            }
+        }
+        Phase::Speech { unlikely_run } => {
+            let unlikely_run = if probability < params.end_probability {
+                unlikely_run + 1
+            } else {
+                0
+            };
+            if unlikely_run >= params.hangover_chunks {
+                (Phase::Silence { likely_run: 0 }, Some(Event::SpeechEnded))
+            } else {
+                (Phase::Speech { unlikely_run }, None)
+            }
+        }
+    };
+
+    let chunks_seen = detector.chunks_seen + 1;
+    let heard_speech = detector.heard_speech || event == Some(Event::SpeechStarted);
+    if !heard_speech && chunks_seen == params.no_speech_chunks {
+        event = Some(Event::NoSpeechTimeout);
+    }
+    let next = Detector {
+        phase,
+        chunks_seen,
+        heard_speech,
+    };
+    (next, event)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -169,5 +290,93 @@ mod tests {
         let expected: [f32; CONTEXT_SAMPLES] =
             std::array::from_fn(|i| (CHUNK_SAMPLES - CONTEXT_SAMPLES + i) as f32);
         assert_eq!(context, expected);
+    }
+
+    /// Events reported for `probabilities`, with the chunk index each one fell on.
+    fn decisions(probabilities: &[f32], params: &Params) -> Vec<(usize, Event)> {
+        let mut detector = Detector::default();
+        let mut events = Vec::new();
+        for (index, &probability) in probabilities.iter().enumerate() {
+            let event;
+            (detector, event) = decide(detector, probability, params);
+            events.extend(event.map(|event| (index, event)));
+        }
+        events
+    }
+
+    const PARAMS: Params = Params {
+        start_probability: 0.9,
+        end_probability: 0.5,
+        start_chunks: 3,
+        hangover_chunks: 4,
+        no_speech_chunks: 20,
+    };
+
+    #[test]
+    fn speech_starts_on_the_last_of_start_chunks_above_the_start_probability() {
+        let probabilities = [0.1, 0.95, 0.95, 0.95, 0.95];
+
+        assert_eq!(
+            decisions(&probabilities, &PARAMS),
+            [(3, Event::SpeechStarted)]
+        );
+    }
+
+    #[test]
+    fn a_dip_below_the_start_probability_restarts_the_count() {
+        let probabilities = [0.95, 0.95, 0.8, 0.95, 0.95];
+
+        assert_eq!(decisions(&probabilities, &PARAMS), []);
+    }
+
+    #[test]
+    fn speech_continues_between_the_end_and_the_start_probability() {
+        let mut probabilities = vec![0.95; 3];
+        probabilities.extend([0.6; 10]);
+
+        assert_eq!(
+            decisions(&probabilities, &PARAMS),
+            [(2, Event::SpeechStarted)]
+        );
+    }
+
+    #[test]
+    fn speech_ends_after_hangover_chunks_below_the_end_probability() {
+        let probabilities = [0.95, 0.95, 0.95, 0.1, 0.1, 0.1, 0.1, 0.1];
+
+        assert_eq!(
+            decisions(&probabilities, &PARAMS),
+            [(2, Event::SpeechStarted), (6, Event::SpeechEnded)]
+        );
+    }
+
+    #[test]
+    fn a_likely_chunk_in_the_hangover_restarts_it() {
+        let probabilities = [0.95, 0.95, 0.95, 0.1, 0.1, 0.1, 0.6, 0.1, 0.1, 0.1, 0.1];
+
+        assert_eq!(
+            decisions(&probabilities, &PARAMS),
+            [(2, Event::SpeechStarted), (10, Event::SpeechEnded)]
+        );
+    }
+
+    #[test]
+    fn no_speech_times_out_once() {
+        let probabilities = [0.1; 50];
+
+        assert_eq!(
+            decisions(&probabilities, &PARAMS),
+            [(19, Event::NoSpeechTimeout)]
+        );
+    }
+
+    #[test]
+    fn heard_speech_stays_true_after_speech_ends() {
+        let mut detector = Detector::default();
+        for probability in [0.95, 0.95, 0.95, 0.1, 0.1, 0.1, 0.1] {
+            detector = decide(detector, probability, &PARAMS).0;
+        }
+
+        assert!(detector.heard_speech());
     }
 }
