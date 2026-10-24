@@ -249,8 +249,6 @@ fn stream_mono(
     let mut seen_errors = Vec::new();
     let mut heard_signal = false;
     let mut heard_speech = false;
-    // Samples of `mono` already measured; the rest is less than a frame.
-    let mut measured = 0;
     let mut levels = Vec::new();
     loop {
         seen_errors.extend(errors.try_iter());
@@ -272,13 +270,11 @@ fn stream_mono(
 
         let measured_frames = levels.len();
         levels.extend(
-            mono[measured..]
+            mono[measured_frames * frame_len..]
                 .chunks_exact(frame_len)
                 .map(silence::level_db),
         );
-        let new_levels = &levels[measured_frames..];
-        measured += new_levels.len() * frame_len;
-        if on_frames(new_levels, &events) == Flow::Stop {
+        if on_frames(&levels[measured_frames..], &events) == Flow::Stop {
             break;
         }
     }
