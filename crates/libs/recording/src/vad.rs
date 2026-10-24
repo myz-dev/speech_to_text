@@ -1,6 +1,6 @@
 //! Speech detection with Silero VAD, a small neural network that tells speech from
-//! other sounds (coughs, typing, music) where an energy detector ([`crate::silence`])
-//! only sees loudness.
+//! other sounds (coughs, typing, music), where loudness alone ([`crate::silence`])
+//! cannot.
 //!
 //! The model reads 16 kHz mono audio in chunks of [`CHUNK_SAMPLES`] (32 ms) and returns
 //! for each chunk the probability that it holds speech. It is recurrent: each chunk is
@@ -8,8 +8,9 @@
 //! is passed into the next [`Vad::step`].
 //!
 //! [`decide`] turns the probabilities into [`Event`]s: speech starts after a few chunks
-//! of high probability and ends after a hangover of lower ones. The thresholds come from recordings of speech, coughs,
-//! throat-clearing and typing (FINDINGS.md, "Silero VAD against coughs and typing").
+//! of high probability and ends after a hangover of lower ones. The thresholds come from
+//! recordings of speech, coughs, throat-clearing and typing (FINDINGS.md, "Silero VAD
+//! against coughs and typing").
 
 use std::path::{Path, PathBuf};
 

@@ -76,9 +76,8 @@ scored above it for 320 ms, longer than a spoken "Ja". Above 0.9, coughs last at
 chunks and a single word at least 7; typing never got above 0.08
 ([FINDINGS](FINDINGS.md#app-silero-vad-against-coughs-and-typing)).
 
-**Trimming:** Silero VAD decides whether there was speech at all. If it heard none,
-nothing is transcribed. If it did, the measured levels are scanned with
-hindsight: speech is 12 dB above the quietest part of the recording, and at least at
+**Trimming:** If Silero VAD heard no speech, nothing is transcribed. Otherwise the
+measured levels are scanned with hindsight: speech is 12 dB above the quietest part of the recording, and at least at
 -55 dBFS, and the silence before and after it is cut, keeping a short margin. Speech
 too quiet for that keeps the whole recording. Measured on the built-in microphone:
 room -71 to -65 dBFS, speech peaks -36 to -32 dBFS

@@ -548,7 +548,7 @@ mod tests {
 
     #[test]
     fn stream_without_speech_events_hears_no_speech() {
-        // Loud enough that the energy detector would take it for speech.
+        // Loud enough to count as speech by level alone.
         let buffers = vec![level(-20.0, FRAME_LEN); 10];
         let streamed = stream(&buffers, &[], 1, stop_after(10));
         assert!(!streamed.heard_speech);

@@ -119,7 +119,7 @@ fn loud_white_noise_is_never_speech() {
         return;
     };
 
-    // Loud enough that the energy detector takes it for speech.
+    // Loud enough to count as speech by level alone.
     let probabilities = vad.probabilities(&white_noise(32_000)).unwrap();
 
     assert_eq!(longest_speech_run(&probabilities), 0, "{probabilities:?}");
