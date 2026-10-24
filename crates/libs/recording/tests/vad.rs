@@ -5,7 +5,8 @@
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
-use recording::vad::{CHUNK_SAMPLES, State, Vad};
+use recording::silence::Event;
+use recording::vad::{self, CHUNK_SAMPLES, Detector, Params, State, Vad};
 
 /// Probability above which a chunk counts as speech in these tests.
 const SPEECH: f32 = 0.5;
@@ -125,43 +126,110 @@ fn loud_white_noise_is_never_speech() {
     assert_eq!(longest_speech_run(&probabilities), 0, "{probabilities:?}");
 }
 
-#[test]
-fn coughing_is_rarely_speech() {
-    let (Some(mut vad), Some(cough)) = (open_vad(), noise_fixture("cough.wav")) else {
-        return;
-    };
+/// What the speech decision with the default [`Params`] reports for `audio`, in order.
+fn events(vad: &mut Vad, audio: &[f32]) -> Vec<Event> {
+    let mut detector = Detector::default();
+    let mut events = Vec::new();
+    for probability in vad.probabilities(audio).unwrap() {
+        let event;
+        (detector, event) = vad::decide(detector, probability, &Params::default());
+        events.extend(event);
+    }
+    events
+}
 
-    let probabilities = vad.probabilities(&cough).unwrap();
-
-    // A single cough can score above 0.5 for ~10 chunks in a row (320 ms), so only the
-    // share is reliable: the speech fixtures have at least a third of chunks above.
-    assert!(speech_share(&probabilities) < 0.1, "{probabilities:?}");
+/// Whether the speech decision reports that speech started anywhere in `audio`.
+fn starts_speech(vad: &mut Vad, audio: &[f32]) -> bool {
+    events(vad, audio).contains(&Event::SpeechStarted)
 }
 
 #[test]
-fn typing_is_not_speech() {
+fn coughing_never_starts_speech() {
+    let Some(mut vad) = open_vad() else {
+        return;
+    };
+    for name in ["cough.wav", "cough-2.wav", "cough-3.wav"] {
+        let Some(cough) = noise_fixture(name) else {
+            continue;
+        };
+
+        assert!(!starts_speech(&mut vad, &cough), "{name}");
+    }
+}
+
+#[test]
+fn typing_never_starts_speech() {
     let (Some(mut vad), Some(typing)) = (open_vad(), noise_fixture("typing.wav")) else {
         return;
     };
 
-    let probabilities = vad.probabilities(&typing).unwrap();
-
-    assert!(longest_speech_run(&probabilities) <= 2, "{probabilities:?}");
+    assert!(!starts_speech(&mut vad, &typing));
 }
 
 #[test]
-fn speech_while_typing_is_speech() {
+fn speech_while_typing_starts_speech() {
     let (Some(mut vad), Some(audio)) = (open_vad(), noise_fixture("typing-speech.wav")) else {
         return;
     };
 
-    let probabilities = vad.probabilities(&audio).unwrap();
+    assert!(starts_speech(&mut vad, &audio));
+}
 
-    // A sentence lasts well over a second: 30 chunks are 0.96 s.
-    assert!(
-        longest_speech_run(&probabilities) >= 30,
-        "{probabilities:?}"
+#[test]
+fn a_single_short_word_starts_speech() {
+    let Some(mut vad) = open_vad() else {
+        return;
+    };
+    for name in ["word-ja.wav", "word-nein.wav", "word-okay.wav"] {
+        let Some(word) = noise_fixture(name) else {
+            continue;
+        };
+
+        assert!(starts_speech(&mut vad, &word), "{name}");
+    }
+}
+
+#[test]
+fn a_cough_after_speech_does_not_start_it_again() {
+    let (Some(mut vad), Some(audio)) = (open_vad(), noise_fixture("speech-cough.wav")) else {
+        return;
+    };
+
+    assert_eq!(
+        events(&mut vad, &audio),
+        [Event::SpeechStarted, Event::SpeechEnded]
     );
+}
+
+/// A known limit: clearing the throat is voiced, and Silero takes it for speech.
+#[test]
+fn clearing_the_throat_starts_speech() {
+    let (Some(mut vad), Some(audio)) = (open_vad(), noise_fixture("throat-clear.wav")) else {
+        return;
+    };
+
+    assert!(starts_speech(&mut vad, &audio));
+}
+
+#[test]
+fn every_dictation_fixture_starts_speech() {
+    let Some(mut vad) = open_vad() else {
+        return;
+    };
+    for language in ["de", "en"] {
+        let Ok(entries) = std::fs::read_dir(workspace_dir().join("fixtures").join(language)) else {
+            eprintln!("skipping: fixtures/{language} not found");
+            continue;
+        };
+        for path in entries.map(|entry| entry.unwrap().path()) {
+            if path.extension().is_none_or(|extension| extension != "wav") {
+                continue;
+            }
+            let audio = recording::load_wav(&path).unwrap();
+
+            assert!(starts_speech(&mut vad, &audio), "{}", path.display());
+        }
+    }
 }
 
 #[test]
