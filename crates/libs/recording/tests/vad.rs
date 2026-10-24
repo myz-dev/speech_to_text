@@ -16,7 +16,7 @@ fn workspace_dir() -> PathBuf {
 }
 
 fn open_vad() -> Option<Vad> {
-    let path = workspace_dir().join("models/silero-vad/silero_vad.onnx");
+    let path = workspace_dir().join("models").join(vad::MODEL_FILE);
     if !path.exists() {
         eprintln!("skipping: {} not found", path.display());
         return None;
@@ -324,17 +324,23 @@ fn live_reports_the_events_of_the_whole_recording_at_any_rate() {
 }
 
 #[test]
-fn live_keeps_samples_that_do_not_complete_a_chunk() {
+fn live_fed_one_sample_at_a_time_reports_the_events_of_the_whole_recording() {
     let Some(mut vad) = open_vad() else {
         return;
     };
     let speech = speak("Anna", "Heute Abend gehen wir zusammen ins Kino.");
-    let mut live = vad::Live::new(&mut vad, Params::default(), recording::SAMPLE_RATE).unwrap();
+    let expected = events(&mut vad, &speech);
+    assert!(expected.contains(&Event::SpeechStarted), "{expected:?}");
 
-    // One sample at a time: every chunk is completed by some call.
-    for sample in &speech {
-        live.push(std::slice::from_ref(sample)).unwrap();
+    for sample_rate in [16_000, 44_100] {
+        let audio =
+            recording::resample(speech.clone(), recording::SAMPLE_RATE, sample_rate).unwrap();
+        let mut live = vad::Live::new(&mut vad, Params::default(), sample_rate).unwrap();
+        let mut events = Vec::new();
+        for sample in &audio {
+            events.extend(live.push(std::slice::from_ref(sample)).unwrap());
+        }
+
+        assert_eq!(events, expected, "at {sample_rate} Hz");
     }
-
-    assert!(live.heard_speech());
 }
