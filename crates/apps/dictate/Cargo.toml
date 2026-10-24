@@ -14,6 +14,11 @@ cleanup.workspace = true
 objc2-core-graphics.workspace = true
 recording.workspace = true
 serde.workspace = true
+serde_json.workspace = true
 tauri = { workspace = true, features = ["tray-icon"] }
 tauri-plugin-global-shortcut.workspace = true
+thiserror.workspace = true
 transcription.workspace = true
+
+[dev-dependencies]
+tempfile.workspace = true

@@ -911,9 +911,12 @@ dependencies = [
  "objc2-core-graphics",
  "recording",
  "serde",
+ "serde_json",
  "tauri",
  "tauri-build",
  "tauri-plugin-global-shortcut",
+ "tempfile",
+ "thiserror 2.0.21",
  "transcription",
 ]
 

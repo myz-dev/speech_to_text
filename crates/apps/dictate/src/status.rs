@@ -21,7 +21,8 @@ pub enum Status {
     Recording,
     Transcribing,
     CleaningUp,
-    /// Idle after a dictation that worked but had a problem worth showing.
+    /// Idle, with a problem worth showing: a dictation that worked only in part, or
+    /// settings that could not be loaded.
     Warning {
         message: String,
     },

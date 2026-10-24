@@ -31,13 +31,16 @@ const MIN_SPEECH_SECS: f64 = 0.3;
 /// Starts the worker thread and returns the sender that drives it with hotkey changes.
 /// The thread runs until every sender is dropped; the app keeps one in its state until
 /// it exits.
-pub fn spawn(app: AppHandle) -> Sender<Key> {
+///
+/// `startup_warning` is a problem found while starting, shown once the model is loaded:
+/// shown earlier, the loading status would replace it.
+pub fn spawn(app: AppHandle, startup_warning: Option<anyhow::Error>) -> Sender<Key> {
     let (sender, receiver) = mpsc::channel();
-    thread::spawn(move || run(&app, &receiver));
+    thread::spawn(move || run(&app, &receiver, startup_warning));
     sender
 }
 
-fn run(app: &AppHandle, keys: &Receiver<Key>) {
+fn run(app: &AppHandle, keys: &Receiver<Key>, startup_warning: Option<anyhow::Error>) {
     status::publish(app, Status::Loading);
     let mut model = match load_model(app) {
         Ok(model) => model,
@@ -47,7 +50,10 @@ fn run(app: &AppHandle, keys: &Receiver<Key>) {
             return;
         }
     };
-    status::publish(app, Status::Idle);
+    status::publish(
+        app,
+        startup_warning.map_or(Status::Idle, |error| Status::warning(&error)),
+    );
 
     for key in keys {
         // A release here belongs to a press that was ignored or already handled.
