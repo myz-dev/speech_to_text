@@ -31,6 +31,7 @@ GUI, global hotkey, paste-at-cursor, streaming, packaging/signing.
 |---|---|
 | `ggml-large-v3-turbo.bin` | huggingface.co/ggerganov/whisper.cpp |
 | `parakeet-tdt-0.6b-v3/{nemo128.onnx, encoder-model.int8.onnx, decoder_joint-model.int8.onnx, vocab.txt, config.json}` | huggingface.co/istupakov/parakeet-tdt-0.6b-v3-onnx |
+| `silero-vad/silero_vad.onnx` (v6.2, MIT) | github.com/snakers4/silero-vad/raw/v6.2/src/silero_vad/data/silero_vad.onnx |
 
 ## Milestones
 | # | Deliverable | Done when |
