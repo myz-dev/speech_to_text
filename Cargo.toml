@@ -16,6 +16,7 @@ recording = { path = "crates/libs/recording" }
 transcription = { path = "crates/libs/transcription" }
 cleanup = { path = "crates/libs/cleanup" }
 eval = { path = "crates/libs/eval" }
+onnx = { path = "crates/libs/onnx" }
 
 # External
 anyhow = "1.0.104"
