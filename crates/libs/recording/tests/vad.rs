@@ -5,8 +5,7 @@
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
-use recording::silence::Event;
-use recording::vad::{self, CHUNK_SAMPLES, Detector, Params, State, Vad};
+use recording::vad::{self, CHUNK_SAMPLES, Detector, Event, Params, State, Vad};
 
 /// Probability above which a chunk counts as speech in these tests.
 const SPEECH: f32 = 0.5;
@@ -16,7 +15,7 @@ fn workspace_dir() -> PathBuf {
 }
 
 fn open_vad() -> Option<Vad> {
-    let path = workspace_dir().join("models/silero-vad/silero_vad.onnx");
+    let path = workspace_dir().join("models").join(vad::MODEL_FILE);
     if !path.exists() {
         eprintln!("skipping: {} not found", path.display());
         return None;
@@ -120,7 +119,7 @@ fn loud_white_noise_is_never_speech() {
         return;
     };
 
-    // Loud enough that the energy detector takes it for speech.
+    // Loud enough to count as speech by level alone.
     let probabilities = vad.probabilities(&white_noise(32_000)).unwrap();
 
     assert_eq!(longest_speech_run(&probabilities), 0, "{probabilities:?}");
@@ -289,4 +288,58 @@ fn a_missing_model_names_its_path() {
         error.to_string(),
         "cannot load silero vad model models/missing.onnx"
     );
+}
+
+/// The events of [`vad::Live`] fed `audio`, converted to `sample_rate`, in pieces of
+/// 10 ms, like microphone buffers.
+fn live_events(vad: &mut Vad, audio: &[f32], sample_rate: u32) -> Vec<Event> {
+    let audio = recording::resample(audio.to_vec(), recording::SAMPLE_RATE, sample_rate).unwrap();
+    let mut live = vad::Live::new(vad, Params::default(), sample_rate).unwrap();
+    let mut events = Vec::new();
+    for piece in audio.chunks(sample_rate as usize / 100) {
+        events.extend(live.push(piece).unwrap());
+    }
+    events
+}
+
+#[test]
+fn live_reports_the_events_of_the_whole_recording_at_any_rate() {
+    let Some(mut vad) = open_vad() else {
+        return;
+    };
+    for name in ["speech-cough.wav", "cough.wav", "word-ja.wav", "typing.wav"] {
+        let Some(audio) = noise_fixture(name) else {
+            continue;
+        };
+        let expected = events(&mut vad, &audio);
+        for sample_rate in [16_000, 44_100, 48_000] {
+            assert_eq!(
+                live_events(&mut vad, &audio, sample_rate),
+                expected,
+                "{name} at {sample_rate} Hz"
+            );
+        }
+    }
+}
+
+#[test]
+fn live_fed_one_sample_at_a_time_reports_the_events_of_the_whole_recording() {
+    let Some(mut vad) = open_vad() else {
+        return;
+    };
+    let speech = speak("Anna", "Heute Abend gehen wir zusammen ins Kino.");
+    let expected = events(&mut vad, &speech);
+    assert!(expected.contains(&Event::SpeechStarted), "{expected:?}");
+
+    for sample_rate in [16_000, 44_100] {
+        let audio =
+            recording::resample(speech.clone(), recording::SAMPLE_RATE, sample_rate).unwrap();
+        let mut live = vad::Live::new(&mut vad, Params::default(), sample_rate).unwrap();
+        let mut events = Vec::new();
+        for sample in &audio {
+            events.extend(live.push(std::slice::from_ref(sample)).unwrap());
+        }
+
+        assert_eq!(events, expected, "at {sample_rate} Hz");
+    }
 }

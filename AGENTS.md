@@ -38,7 +38,7 @@ claims above independently; do not assume they hold."*
   expensive resources (a loaded model), not behavior hierarchies.
 - Constructors (`Type::new`, `Type::open`, `TryFrom`) and `&self` methods are welcome.
 - Avoid `&mut self` methods whose effect depends on state left behind by earlier
-  calls; pass that state in and return it instead (like `silence::step`).
+  calls; pass that state in and return it instead (like `vad::decide`).
 - No factories, builders-for-the-sake-of-it, or layers of indirection. A code path
   should be followable with "go to definition".
 

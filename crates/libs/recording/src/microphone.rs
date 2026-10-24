@@ -7,7 +7,8 @@ use cpal::{Device, ErrorKind, FromSample, SampleFormat, SizedSample, Stream, Str
 
 use crate::SAMPLE_RATE;
 use crate::convert::{ResampleError, resample, to_mono};
-use crate::silence::{self, Detector, Frame, Params};
+use crate::silence::{self, Params};
+use crate::vad::{self, Event, Vad, VadError};
 
 #[derive(Debug, thiserror::Error)]
 pub enum RecordError {
@@ -43,6 +44,8 @@ pub enum RecordError {
     Silent { device: String },
     #[error("cannot convert the recording to {SAMPLE_RATE} Hz")]
     Resample(#[source] ResampleError),
+    #[error("speech detection failed")]
+    Vad(#[source] VadError),
 }
 
 /// A microphone recording, converted to 16 kHz mono samples.
@@ -59,7 +62,7 @@ pub struct Recording {
     /// stream starts while the microphone permission dialog is open.
     pub overruns: usize,
     /// Range of `samples` to transcribe: from the first to the last speech, padded.
-    /// `None` if the recording holds no speech, e.g. only silence or typing.
+    /// `None` if Silero VAD heard no speech, e.g. only silence, coughs or typing.
     pub speech: Option<Range<usize>>,
 }
 
@@ -80,13 +83,19 @@ const SILENT_LIMIT_SECS: usize = 1;
 ///
 /// `wait` runs on the calling thread while the device captures audio on its own thread,
 /// e.g. a closure that blocks until the user presses Enter. The device's native format
-/// is converted to 16 kHz mono afterwards. Speech is detected with `params` as in
-/// [`record_streaming`], after the recording instead of during it.
+/// is converted to 16 kHz mono afterwards. Speech is detected with `vad` and
+/// `vad_params`, and trimmed with `params`, as in [`record_streaming`], after the
+/// recording instead of during it.
 ///
 /// macOS does not report a denied microphone permission as an error; the device then
 /// delivers exact zeros. A recording that consists only of zeros is therefore rejected
 /// as [`RecordError::Silent`]. A real microphone always picks up some noise.
-pub fn record(params: &Params, wait: impl FnOnce()) -> Result<Recording, RecordError> {
+pub fn record(
+    params: &Params,
+    vad: &mut Vad,
+    vad_params: &vad::Params,
+    wait: impl FnOnce(),
+) -> Result<Recording, RecordError> {
     let input = Input::open()?;
     wait();
     // After the drop no callback runs anymore, so the channels hold all captured audio.
@@ -96,48 +105,54 @@ pub fn record(params: &Params, wait: impl FnOnce()) -> Result<Recording, RecordE
     let errors: Vec<cpal::Error> = input.errors.try_iter().collect();
     let interleaved: Vec<f32> = input.samples.try_iter().flatten().collect();
     let mono = to_mono(interleaved, input.channels);
-    let mut detector = Detector::default();
-    let mut levels = Vec::new();
-    for chunk in mono.chunks_exact(silence::frame_len(input.sample_rate)) {
-        let frame;
-        (detector, frame) = silence::analyse(detector, chunk, params);
-        levels.push(frame.level_db);
-    }
+    let levels = mono
+        .chunks_exact(silence::frame_len(input.sample_rate))
+        .map(silence::level_db)
+        .collect();
+    let mut live = vad::Live::new(vad, *vad_params, input.sample_rate).map_err(RecordError::Vad)?;
+    live.push(&mono).map_err(RecordError::Vad)?;
     let streamed = Streamed {
         mono,
         errors,
         levels,
-        heard_speech: detector.heard_speech(),
+        heard_speech: live.heard_speech(),
     };
     finish(input.device, streamed, input.sample_rate, params)
 }
 
-/// Records from the default input device, measuring it in 30 ms frames as it arrives,
-/// until `on_frames` returns [`Flow::Stop`].
+/// Records from the default input device, measuring it in 30 ms frames and running
+/// Silero VAD on it as it arrives, until `on_frames` returns [`Flow::Stop`].
 ///
-/// `on_frames` runs on the calling thread with the frames completed since its last
-/// call: their level, the speech threshold and noise floor, and the speech detector's
-/// events (see [`silence`]). It is called at least every 20 ms, with no frames when no
-/// audio arrived, so it can stop on other events too. The whole recording is converted
-/// to 16 kHz once, after the stop.
+/// `on_frames` runs on the calling thread with the levels (dBFS) of the frames completed
+/// since its last call and the speech events of the 32 ms chunks completed since then
+/// ([`vad::Live`] with `vad_params`). It is called at least every
+/// 20 ms, with no frames when no audio arrived, so it can stop on other events too. The
+/// whole recording is converted to 16 kHz once more after the stop, for the speech
+/// models; `params` trims it to the speech.
 ///
 /// Like [`record`], a recording of only zeros is [`RecordError::Silent`]; here the
 /// recording stops after a second of them instead of waiting for `on_frames`. If
 /// `on_frames` stops before the first buffer arrives, the recording is empty.
 pub fn record_streaming(
     params: &Params,
-    on_frames: impl FnMut(&[Frame]) -> Flow,
+    vad: &mut Vad,
+    vad_params: &vad::Params,
+    on_frames: impl FnMut(&[f32], &[Event]) -> Flow,
 ) -> Result<Recording, RecordError> {
     let input = Input::open()?;
-    let mut streamed = stream_mono(
+    let mut live = vad::Live::new(vad, *vad_params, input.sample_rate).map_err(RecordError::Vad)?;
+    let streamed = stream_mono(
         &input.samples,
         &input.errors,
         input.channels,
         input.sample_rate,
-        params,
+        |mono| live.push(mono),
         on_frames,
     );
     drop(input.stream);
+    // A failed speech detector ends the recording with its error, even if the device
+    // also failed: the stream errors are only looked at in `finish`.
+    let mut streamed = streamed.map_err(RecordError::Vad)?;
 
     // Audio captured between the stop and the drop belongs to the recording too.
     for buffer in input.samples.try_iter() {
@@ -212,30 +227,28 @@ struct Streamed {
     /// Level of every measured 30 ms frame of `mono`, in dBFS. Audio after the last
     /// whole frame, or received after the stop, is not measured.
     levels: Vec<f32>,
-    /// Whether the live speech detector reported speech.
+    /// Whether the speech detector reported [`Event::SpeechStarted`].
     heard_speech: bool,
 }
 
-/// Receives buffers, downmixes each to mono, measures every completed 30 ms frame and
-/// passes the new frames to `on_frames`, until `on_frames` stops, a fatal stream error
-/// arrives, the senders are gone, or a second of exact zeros has arrived.
+/// Receives buffers, downmixes each to mono, passes it to `detect_speech`, measures
+/// every completed 30 ms frame and passes the new levels and speech events to
+/// `on_frames`, until `on_frames` stops, a fatal stream error arrives, the senders are
+/// gone, or a second of exact zeros has arrived. An error of `detect_speech` ends it.
 fn stream_mono(
     samples: &Receiver<Vec<f32>>,
     errors: &Receiver<cpal::Error>,
     channels: usize,
     sample_rate: u32,
-    params: &Params,
-    mut on_frames: impl FnMut(&[Frame]) -> Flow,
-) -> Streamed {
+    mut detect_speech: impl FnMut(&[f32]) -> Result<Vec<Event>, VadError>,
+    mut on_frames: impl FnMut(&[f32], &[Event]) -> Flow,
+) -> Result<Streamed, VadError> {
     let silent_limit = sample_rate as usize * SILENT_LIMIT_SECS;
     let frame_len = silence::frame_len(sample_rate);
     let mut mono = Vec::new();
     let mut seen_errors = Vec::new();
     let mut heard_signal = false;
-    let mut detector = Detector::default();
-    // Samples of `mono` already measured; the rest is less than a frame.
-    let mut measured = 0;
-    let mut frames = Vec::new();
+    let mut heard_speech = false;
     let mut levels = Vec::new();
     loop {
         seen_errors.extend(errors.try_iter());
@@ -248,29 +261,29 @@ fn stream_mono(
             Err(RecvTimeoutError::Disconnected) => break,
         };
         heard_signal = heard_signal || new.iter().any(|&sample| sample != 0.0);
+        let events = detect_speech(&new)?;
+        heard_speech = heard_speech || events.contains(&Event::SpeechStarted);
         mono.extend(new);
         if !heard_signal && mono.len() >= silent_limit {
             break;
         }
 
-        frames.clear();
-        for chunk in mono[measured..].chunks_exact(frame_len) {
-            let frame;
-            (detector, frame) = silence::analyse(detector, chunk, params);
-            frames.push(frame);
-            levels.push(frame.level_db);
-        }
-        measured += frames.len() * frame_len;
-        if on_frames(&frames) == Flow::Stop {
+        let measured_frames = levels.len();
+        levels.extend(
+            mono[measured_frames * frame_len..]
+                .chunks_exact(frame_len)
+                .map(silence::level_db),
+        );
+        if on_frames(&levels[measured_frames..], &events) == Flow::Stop {
             break;
         }
     }
-    Streamed {
+    Ok(Streamed {
         mono,
         errors: seen_errors,
         levels,
-        heard_speech: detector.heard_speech(),
-    }
+        heard_speech,
+    })
 }
 
 /// Turns captured audio into a [`Recording`], or the error that ended it.
@@ -296,17 +309,16 @@ fn finish(
         return Err(RecordError::Silent { device });
     }
     let samples = resample(mono, sample_rate, SAMPLE_RATE).map_err(RecordError::Resample)?;
-    // The live detector decides whether there is speech: its noise floor follows steady
-    // noise such as typing, which `speech_span`, measuring against the quietest part of
-    // the recording, can mistake for speech. `speech_span` only trims, on the same
-    // levels, so it finds a span whenever the live detector heard speech.
-    let speech_frames = if heard_speech {
-        silence::speech_span(&levels, params)
-    } else {
-        None
-    };
+    // Silero VAD decides whether there is speech: by loudness alone, coughs and typing
+    // are speech. `speech_span` only trims, by loudness. Speech too quiet for it
+    // (below `Params::min_start_db`) keeps the whole recording: audio is kept, not
+    // words lost. Known limit: quiet speech next to a louder cough or typing is cut,
+    // because the span then covers only the loud noise.
     let to_sample = |frame| frame_start_at_16k(frame, sample_rate).min(samples.len());
-    let speech = speech_frames.map(|frames| to_sample(frames.start)..to_sample(frames.end));
+    let speech = heard_speech.then(|| match silence::speech_span(&levels, params) {
+        Some(frames) => to_sample(frames.start)..to_sample(frames.end),
+        None => 0..samples.len(),
+    });
     Ok(Recording {
         samples,
         device,
@@ -397,7 +409,6 @@ fn device_name(device: &Device) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::silence::Event;
 
     /// 30-sample frames, so short buffers span frame boundaries.
     const RATE: u32 = 1_000;
@@ -409,13 +420,31 @@ mod tests {
     }
 
     /// Runs `stream_mono` on `buffers`, already queued, with the senders kept alive so
-    /// only `on_frames`, an error or digital silence ends it.
+    /// only `on_frames`, an error or digital silence ends it. No speech is detected.
     fn stream(
         buffers: &[Vec<f32>],
         stream_errors: &[ErrorKind],
         channels: usize,
-        on_frames: impl FnMut(&[Frame]) -> Flow,
+        on_frames: impl FnMut(&[f32], &[Event]) -> Flow,
     ) -> Streamed {
+        stream_detecting(
+            buffers,
+            stream_errors,
+            channels,
+            |_| Ok(Vec::new()),
+            on_frames,
+        )
+        .unwrap()
+    }
+
+    /// Like [`stream`], with `detect_speech` as the speech detector.
+    fn stream_detecting(
+        buffers: &[Vec<f32>],
+        stream_errors: &[ErrorKind],
+        channels: usize,
+        detect_speech: impl FnMut(&[f32]) -> Result<Vec<Event>, VadError>,
+        on_frames: impl FnMut(&[f32], &[Event]) -> Flow,
+    ) -> Result<Streamed, VadError> {
         let (sample_sender, samples) = mpsc::channel();
         let (error_sender, errors) = mpsc::channel();
         for buffer in buffers {
@@ -424,14 +453,13 @@ mod tests {
         for &kind in stream_errors {
             error_sender.send(kind.into()).unwrap();
         }
-        let params = Params::default();
-        stream_mono(&samples, &errors, channels, RATE, &params, on_frames)
+        stream_mono(&samples, &errors, channels, RATE, detect_speech, on_frames)
     }
 
     /// Stops once `on_frames` has seen `limit` calls.
-    fn stop_after(limit: usize) -> impl FnMut(&[Frame]) -> Flow {
+    fn stop_after(limit: usize) -> impl FnMut(&[f32], &[Event]) -> Flow {
         let mut calls = 0;
-        move |_| {
+        move |_, _| {
             calls += 1;
             if calls >= limit {
                 Flow::Stop
@@ -454,14 +482,9 @@ mod tests {
         let buffers = vec![level(-20.0, 20); 4];
         let mut seen = Vec::new();
         let mut on_frames = stop_after(4);
-        stream(&buffers, &[], 1, |frames| {
-            seen.push(
-                frames
-                    .iter()
-                    .map(|frame| frame.level_db)
-                    .collect::<Vec<_>>(),
-            );
-            on_frames(frames)
+        stream(&buffers, &[], 1, |levels, events| {
+            seen.push(levels.to_vec());
+            on_frames(levels, events)
         });
         let counts: Vec<usize> = seen.iter().map(Vec::len).collect();
         assert_eq!(counts, [0, 1, 1, 0]);
@@ -470,18 +493,49 @@ mod tests {
         }
     }
 
+    /// Reports [`Event::SpeechStarted`] for the first buffer that holds a sample of 0.5.
+    fn detect_half_as_speech() -> impl FnMut(&[f32]) -> Result<Vec<Event>, VadError> {
+        let mut started = false;
+        move |mono| {
+            if !started && mono.contains(&0.5) {
+                started = true;
+                return Ok(vec![Event::SpeechStarted]);
+            }
+            Ok(Vec::new())
+        }
+    }
+
     #[test]
-    fn stream_reports_speech_after_a_quiet_start() {
-        let mut buffers = vec![level(-70.0, FRAME_LEN); 10];
-        buffers.extend(vec![level(-30.0, FRAME_LEN); 5]);
-        let mut events = Vec::new();
+    fn stream_passes_each_buffer_to_the_detector_and_its_events_to_on_frames() {
+        let buffers = [vec![0.1; 10], vec![0.5; 10], vec![0.1; 10]];
+        let mut calls = Vec::new();
         let mut on_frames = stop_after(buffers.len());
-        let streamed = stream(&buffers, &[], 1, |frames| {
-            events.extend(frames.iter().filter_map(|frame| frame.event));
-            on_frames(frames)
-        });
-        assert_eq!(events, [Event::SpeechStarted]);
+        let streamed = stream_detecting(
+            &buffers,
+            &[],
+            1,
+            detect_half_as_speech(),
+            |frames, events| {
+                calls.push(events.to_vec());
+                on_frames(frames, events)
+            },
+        )
+        .unwrap();
+        assert_eq!(calls, [vec![], vec![Event::SpeechStarted], vec![]]);
         assert!(streamed.heard_speech);
+    }
+
+    #[test]
+    fn stream_ends_with_the_error_of_the_detector() {
+        let buffers = [vec![0.1; 10]];
+        let result = stream_detecting(
+            &buffers,
+            &[],
+            1,
+            |_| Err(VadError::MissingOutput("output")),
+            |_, _| Flow::Continue,
+        );
+        assert!(matches!(result, Err(VadError::MissingOutput("output"))));
     }
 
     #[test]
@@ -493,8 +547,9 @@ mod tests {
     }
 
     #[test]
-    fn stream_without_loud_frames_hears_no_speech() {
-        let buffers = vec![level(-70.0, FRAME_LEN); 10];
+    fn stream_without_speech_events_hears_no_speech() {
+        // Loud enough to count as speech by level alone.
+        let buffers = vec![level(-20.0, FRAME_LEN); 10];
         let streamed = stream(&buffers, &[], 1, stop_after(10));
         assert!(!streamed.heard_speech);
     }
@@ -510,7 +565,7 @@ mod tests {
     fn stream_calls_on_frames_without_audio_every_poll_interval() {
         let started = std::time::Instant::now();
         let mut calls = Vec::new();
-        let streamed = stream(&[], &[], 1, |frames| {
+        let streamed = stream(&[], &[], 1, |frames, _| {
             calls.push(frames.len());
             if calls.len() == 3 {
                 Flow::Stop
@@ -529,15 +584,22 @@ mod tests {
         let (_error_sender, errors) = mpsc::channel();
         sample_sender.send(vec![0.1; 10]).unwrap();
         drop(sample_sender);
-        let params = Params::default();
-        let streamed = stream_mono(&samples, &errors, 1, RATE, &params, |_| Flow::Continue);
+        let streamed = stream_mono(
+            &samples,
+            &errors,
+            1,
+            RATE,
+            |_| Ok(Vec::new()),
+            |_, _| Flow::Continue,
+        )
+        .unwrap();
         assert_eq!(streamed.mono.len(), 10);
     }
 
     #[test]
     fn stream_stops_at_a_fatal_error_and_reports_it() {
         let buffers = [vec![0.1; 10], vec![0.1; 10]];
-        let streamed = stream(&buffers, &[ErrorKind::DeviceNotAvailable], 1, |_| {
+        let streamed = stream(&buffers, &[ErrorKind::DeviceNotAvailable], 1, |_, _| {
             Flow::Continue
         });
         assert!(streamed.mono.is_empty());
@@ -555,7 +617,7 @@ mod tests {
     #[test]
     fn stream_stops_after_a_second_of_digital_silence() {
         let buffers = vec![vec![0.0; 100]; 15];
-        let streamed = stream(&buffers, &[], 1, |_| Flow::Continue);
+        let streamed = stream(&buffers, &[], 1, |_, _| Flow::Continue);
         assert_eq!(streamed.mono.len(), RATE as usize);
         assert!(is_digital_silence(&streamed.mono));
     }
@@ -615,7 +677,7 @@ mod tests {
     }
 
     #[test]
-    fn finish_trims_to_the_speech_the_live_detector_heard() {
+    fn finish_trims_to_the_speech_the_detector_heard() {
         let captured = streamed(quiet_loud_quiet(), true);
         let recording = finish("mic".to_owned(), captured, RATE, &Params::default()).unwrap();
         let speech = recording.speech.expect("speech range");
@@ -633,10 +695,17 @@ mod tests {
     }
 
     #[test]
-    fn finish_has_no_speech_when_the_live_detector_heard_none() {
+    fn finish_has_no_speech_when_the_detector_heard_none() {
         let captured = streamed(quiet_loud_quiet(), false);
         let recording = finish("mic".to_owned(), captured, RATE, &Params::default()).unwrap();
         assert_eq!(recording.speech, None);
+    }
+
+    #[test]
+    fn finish_keeps_everything_when_the_detector_heard_speech_too_quiet_to_trim() {
+        let captured = streamed(level(-70.0, 2 * RATE as usize), true);
+        let recording = finish("mic".to_owned(), captured, RATE, &Params::default()).unwrap();
+        assert_eq!(recording.speech, Some(0..recording.samples.len()));
     }
 
     #[test]

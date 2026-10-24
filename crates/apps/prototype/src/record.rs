@@ -8,11 +8,12 @@ use std::time::Instant;
 
 use anyhow::bail;
 use recording::Flow;
-use recording::silence::{self, Event, Frame, Params};
+use recording::silence::{self, Params};
+use recording::vad::{self, Event, Vad};
 
 use crate::{
-    Dictation, Lang, SttArgs, check_recording, load_model, record_dictation, timed, timings_line,
-    wait_for_enter,
+    Dictation, Lang, SttArgs, check_recording, load_model, load_vad, record_dictation, timed,
+    timings_line, wait_for_enter,
 };
 
 #[derive(Debug, clap::Args)]
@@ -37,10 +38,11 @@ pub(crate) fn execute(args: &Args, out: &mut dyn Write) -> anyhow::Result<()> {
     let stt = &args.stt;
     // Loading first keeps it out of the time from stop to text.
     let (mut model, load_secs) = timed(|| load_model(stt))?;
+    let mut vad = load_vad(stt)?;
     let dictation = if args.auto_stop {
-        record_until_silence(args.save.as_deref())?
+        record_until_silence(&mut vad, args.save.as_deref())?
     } else {
-        record_dictation(args.save.as_deref())?
+        record_dictation(&mut vad, args.save.as_deref())?
     };
     let (transcript, inference_secs) =
         timed(|| Ok(model.transcribe(&dictation.samples, stt.language.map(Lang::code))?))?;
@@ -56,39 +58,41 @@ pub(crate) fn execute(args: &Args, out: &mut dyn Write) -> anyhow::Result<()> {
 }
 
 /// Records from the default microphone until the speech detector reports the end of
-/// speech (or no speech at all), or Enter is pressed. Prints every frame, then keeps
-/// only the detected speech.
-fn record_until_silence(save: Option<&Path>) -> anyhow::Result<Dictation> {
+/// speech (or no speech at all), or Enter is pressed. Prints every frame and every
+/// speech event, then keeps only the detected speech.
+fn record_until_silence(vad: &mut Vad, save: Option<&Path>) -> anyhow::Result<Dictation> {
     eprint!("Press Enter to start recording.");
     wait_for_enter()?;
     eprintln!("Recording until you stop speaking, or press Enter.");
-    eprintln!("  time   level  floor  start");
+    eprintln!("  time   level");
     let enter = enter_presses();
     let mut frame_count = 0_u32;
     let mut silent_start_frames = 0_u32;
     let mut stopped_at = Instant::now();
 
-    let recording = recording::record_streaming(&Params::default(), |frames| {
-        for frame in frames {
-            frame_count += 1;
-            if frame_count <= silence::frames(1_000) && frame.level_db <= silence::MIN_DB {
-                silent_start_frames += 1;
+    let vad_params = vad::Params::default();
+    let recording =
+        recording::record_streaming(&Params::default(), vad, &vad_params, |levels, events| {
+            for &level_db in levels {
+                frame_count += 1;
+                if frame_count <= silence::frames(1_000) && level_db <= silence::MIN_DB {
+                    silent_start_frames += 1;
+                }
+                print_frame(frame_count, level_db);
             }
-            print_frame(frame_count, frame);
-            if matches!(
-                frame.event,
-                Some(Event::SpeechEnded | Event::NoSpeechTimeout)
-            ) {
+            for &event in events {
+                eprintln!("  <- {event:?}");
+                if matches!(event, Event::SpeechEnded | Event::NoSpeechTimeout) {
+                    stopped_at = Instant::now();
+                    return Flow::Stop;
+                }
+            }
+            if enter.try_recv().is_ok() {
                 stopped_at = Instant::now();
                 return Flow::Stop;
             }
-        }
-        if enter.try_recv().is_ok() {
-            stopped_at = Instant::now();
-            return Flow::Stop;
-        }
-        Flow::Continue
-    })?;
+            Flow::Continue
+        })?;
 
     eprintln!(
         "{} ms of digital silence in the first second.",
@@ -124,17 +128,10 @@ fn enter_presses() -> Receiver<()> {
     receiver
 }
 
-/// Prints one frame: its end time, level, noise floor and start threshold in dBFS, a
-/// level bar from -80 dBFS (2 dB per character), and the detector's event, if any.
-fn print_frame(index: u32, frame: &Frame) {
+/// Prints one frame: its end time, its level in dBFS, and a level bar from -80 dBFS
+/// (2 dB per character).
+fn print_frame(index: u32, level_db: f32) {
     let secs = f64::from(index * silence::FRAME_MS) / 1_000.0;
-    let bar = "#".repeat(((frame.level_db + 80.0) / 2.0).max(0.0) as usize);
-    let event = frame
-        .event
-        .map(|event| format!("  <- {event:?}"))
-        .unwrap_or_default();
-    eprintln!(
-        "{secs:6.2} {:7.1} {:6.1} {:6.1}  {bar}{event}",
-        frame.level_db, frame.floor_db, frame.start_db
-    );
+    let bar = "#".repeat(((level_db + 80.0) / 2.0).max(0.0) as usize);
+    eprintln!("{secs:6.2} {level_db:7.1}  {bar}");
 }

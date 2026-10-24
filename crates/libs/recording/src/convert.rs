@@ -47,7 +47,20 @@ pub fn resample(
         return Ok(samples);
     }
 
-    let mut resampler = Fft::<f32>::new(
+    let mut resampler = resampler(from_rate, to_rate)?;
+    // Invariant: one channel with `samples.len()` frames always matches the slice length.
+    let input = InterleavedSlice::new(&samples, 1, samples.len())
+        .expect("mono slice length equals its frame count");
+    let output = resampler
+        .process_all(&input, samples.len(), None)
+        .map_err(ResampleError::Process)?;
+    Ok(output.take_data())
+}
+
+/// A mono FFT resampler from `from_rate` to `to_rate` that takes chunks of a fixed
+/// number of input samples ([`Resampler::input_frames_next`]).
+pub(crate) fn resampler(from_rate: u32, to_rate: u32) -> Result<Fft<f32>, ResampleError> {
+    Fft::<f32>::new(
         from_rate as usize,
         to_rate as usize,
         RESAMPLER_CHUNK_SIZE,
@@ -58,15 +71,7 @@ pub fn resample(
         from_rate,
         to_rate,
         source,
-    })?;
-
-    // Invariant: one channel with `samples.len()` frames always matches the slice length.
-    let input = InterleavedSlice::new(&samples, 1, samples.len())
-        .expect("mono slice length equals its frame count");
-    let output = resampler
-        .process_all(&input, samples.len(), None)
-        .map_err(ResampleError::Process)?;
-    Ok(output.take_data())
+    })
 }
 
 #[cfg(test)]
