@@ -7,8 +7,8 @@ use cpal::{Device, ErrorKind, FromSample, SampleFormat, SizedSample, Stream, Str
 
 use crate::SAMPLE_RATE;
 use crate::convert::{ResampleError, resample, to_mono};
-use crate::silence::{self, Detector, Event, Frame, Params};
-use crate::vad::{self, Vad, VadError};
+use crate::silence::{self, Params};
+use crate::vad::{self, Event, Vad, VadError};
 
 #[derive(Debug, thiserror::Error)]
 pub enum RecordError {
@@ -105,13 +105,10 @@ pub fn record(
     let errors: Vec<cpal::Error> = input.errors.try_iter().collect();
     let interleaved: Vec<f32> = input.samples.try_iter().flatten().collect();
     let mono = to_mono(interleaved, input.channels);
-    let mut detector = Detector::default();
-    let mut levels = Vec::new();
-    for chunk in mono.chunks_exact(silence::frame_len(input.sample_rate)) {
-        let frame;
-        (detector, frame) = silence::analyse(detector, chunk, params);
-        levels.push(frame.level_db);
-    }
+    let levels = mono
+        .chunks_exact(silence::frame_len(input.sample_rate))
+        .map(silence::level_db)
+        .collect();
     let mut live = vad::Live::new(vad, *vad_params, input.sample_rate).map_err(RecordError::Vad)?;
     live.push(&mono).map_err(RecordError::Vad)?;
     let streamed = Streamed {
@@ -126,9 +123,9 @@ pub fn record(
 /// Records from the default input device, measuring it in 30 ms frames and running
 /// Silero VAD on it as it arrives, until `on_frames` returns [`Flow::Stop`].
 ///
-/// `on_frames` runs on the calling thread with the frames completed since its last
-/// call (their level, see [`silence`]) and the speech events of the 32 ms chunks
-/// completed since then ([`vad::Live`] with `vad_params`). It is called at least every
+/// `on_frames` runs on the calling thread with the levels (dBFS) of the frames completed
+/// since its last call and the speech events of the 32 ms chunks completed since then
+/// ([`vad::Live`] with `vad_params`). It is called at least every
 /// 20 ms, with no frames when no audio arrived, so it can stop on other events too. The
 /// whole recording is converted to 16 kHz once more after the stop, for the speech
 /// models; `params` trims it to the speech.
@@ -140,7 +137,7 @@ pub fn record_streaming(
     params: &Params,
     vad: &mut Vad,
     vad_params: &vad::Params,
-    on_frames: impl FnMut(&[Frame], &[Event]) -> Flow,
+    on_frames: impl FnMut(&[f32], &[Event]) -> Flow,
 ) -> Result<Recording, RecordError> {
     let input = Input::open()?;
     let mut live = vad::Live::new(vad, *vad_params, input.sample_rate).map_err(RecordError::Vad)?;
@@ -149,7 +146,6 @@ pub fn record_streaming(
         &input.errors,
         input.channels,
         input.sample_rate,
-        params,
         |mono| live.push(mono),
         on_frames,
     );
@@ -236,7 +232,7 @@ struct Streamed {
 }
 
 /// Receives buffers, downmixes each to mono, passes it to `detect_speech`, measures
-/// every completed 30 ms frame and passes the new frames and speech events to
+/// every completed 30 ms frame and passes the new levels and speech events to
 /// `on_frames`, until `on_frames` stops, a fatal stream error arrives, the senders are
 /// gone, or a second of exact zeros has arrived. An error of `detect_speech` ends it.
 fn stream_mono(
@@ -244,9 +240,8 @@ fn stream_mono(
     errors: &Receiver<cpal::Error>,
     channels: usize,
     sample_rate: u32,
-    params: &Params,
     mut detect_speech: impl FnMut(&[f32]) -> Result<Vec<Event>, VadError>,
-    mut on_frames: impl FnMut(&[Frame], &[Event]) -> Flow,
+    mut on_frames: impl FnMut(&[f32], &[Event]) -> Flow,
 ) -> Result<Streamed, VadError> {
     let silent_limit = sample_rate as usize * SILENT_LIMIT_SECS;
     let frame_len = silence::frame_len(sample_rate);
@@ -254,10 +249,8 @@ fn stream_mono(
     let mut seen_errors = Vec::new();
     let mut heard_signal = false;
     let mut heard_speech = false;
-    let mut detector = Detector::default();
     // Samples of `mono` already measured; the rest is less than a frame.
     let mut measured = 0;
-    let mut frames = Vec::new();
     let mut levels = Vec::new();
     loop {
         seen_errors.extend(errors.try_iter());
@@ -277,15 +270,15 @@ fn stream_mono(
             break;
         }
 
-        frames.clear();
-        for chunk in mono[measured..].chunks_exact(frame_len) {
-            let frame;
-            (detector, frame) = silence::analyse(detector, chunk, params);
-            frames.push(frame);
-            levels.push(frame.level_db);
-        }
-        measured += frames.len() * frame_len;
-        if on_frames(&frames, &events) == Flow::Stop {
+        let measured_frames = levels.len();
+        levels.extend(
+            mono[measured..]
+                .chunks_exact(frame_len)
+                .map(silence::level_db),
+        );
+        let new_levels = &levels[measured_frames..];
+        measured += new_levels.len() * frame_len;
+        if on_frames(new_levels, &events) == Flow::Stop {
             break;
         }
     }
@@ -436,7 +429,7 @@ mod tests {
         buffers: &[Vec<f32>],
         stream_errors: &[ErrorKind],
         channels: usize,
-        on_frames: impl FnMut(&[Frame], &[Event]) -> Flow,
+        on_frames: impl FnMut(&[f32], &[Event]) -> Flow,
     ) -> Streamed {
         stream_detecting(
             buffers,
@@ -454,7 +447,7 @@ mod tests {
         stream_errors: &[ErrorKind],
         channels: usize,
         detect_speech: impl FnMut(&[f32]) -> Result<Vec<Event>, VadError>,
-        on_frames: impl FnMut(&[Frame], &[Event]) -> Flow,
+        on_frames: impl FnMut(&[f32], &[Event]) -> Flow,
     ) -> Result<Streamed, VadError> {
         let (sample_sender, samples) = mpsc::channel();
         let (error_sender, errors) = mpsc::channel();
@@ -464,20 +457,11 @@ mod tests {
         for &kind in stream_errors {
             error_sender.send(kind.into()).unwrap();
         }
-        let params = Params::default();
-        stream_mono(
-            &samples,
-            &errors,
-            channels,
-            RATE,
-            &params,
-            detect_speech,
-            on_frames,
-        )
+        stream_mono(&samples, &errors, channels, RATE, detect_speech, on_frames)
     }
 
     /// Stops once `on_frames` has seen `limit` calls.
-    fn stop_after(limit: usize) -> impl FnMut(&[Frame], &[Event]) -> Flow {
+    fn stop_after(limit: usize) -> impl FnMut(&[f32], &[Event]) -> Flow {
         let mut calls = 0;
         move |_, _| {
             calls += 1;
@@ -502,14 +486,9 @@ mod tests {
         let buffers = vec![level(-20.0, 20); 4];
         let mut seen = Vec::new();
         let mut on_frames = stop_after(4);
-        stream(&buffers, &[], 1, |frames, events| {
-            seen.push(
-                frames
-                    .iter()
-                    .map(|frame| frame.level_db)
-                    .collect::<Vec<_>>(),
-            );
-            on_frames(frames, events)
+        stream(&buffers, &[], 1, |levels, events| {
+            seen.push(levels.to_vec());
+            on_frames(levels, events)
         });
         let counts: Vec<usize> = seen.iter().map(Vec::len).collect();
         assert_eq!(counts, [0, 1, 1, 0]);
@@ -609,13 +588,11 @@ mod tests {
         let (_error_sender, errors) = mpsc::channel();
         sample_sender.send(vec![0.1; 10]).unwrap();
         drop(sample_sender);
-        let params = Params::default();
         let streamed = stream_mono(
             &samples,
             &errors,
             1,
             RATE,
-            &params,
             |_| Ok(Vec::new()),
             |_, _| Flow::Continue,
         )

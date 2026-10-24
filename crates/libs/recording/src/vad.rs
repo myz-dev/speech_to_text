@@ -7,9 +7,8 @@
 //! judged together with what came before, which the model returns as a [`State`] that
 //! is passed into the next [`Vad::step`].
 //!
-//! [`decide`] turns the probabilities into the events of the energy detector
-//! ([`Event`]): speech starts after a few chunks of high probability and ends after a
-//! hangover of lower ones. The thresholds come from recordings of speech, coughs,
+//! [`decide`] turns the probabilities into [`Event`]s: speech starts after a few chunks
+//! of high probability and ends after a hangover of lower ones. The thresholds come from recordings of speech, coughs,
 //! throat-clearing and typing (FINDINGS.md, "Silero VAD against coughs and typing").
 
 use std::path::{Path, PathBuf};
@@ -21,7 +20,6 @@ use rubato::{Fft, Resampler};
 
 use crate::SAMPLE_RATE;
 use crate::convert::{ResampleError, resampler};
-use crate::silence::Event;
 
 /// The model file inside a models directory, as PLAN.md and SETUP.md download it.
 pub const MODEL_FILE: &str = "silero-vad/silero_vad.onnx";
@@ -208,6 +206,15 @@ impl Default for Params {
             no_speech_chunks: chunks(10_000),
         }
     }
+}
+
+/// What the speech decision reports at a chunk.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Event {
+    SpeechStarted,
+    SpeechEnded,
+    /// No speech in the first [`Params::no_speech_chunks`] chunks. Reported once.
+    NoSpeechTimeout,
 }
 
 /// State of the speech decision, passed into [`decide`] and returned by it.

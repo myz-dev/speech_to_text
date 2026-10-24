@@ -6,7 +6,7 @@
 use std::time::{Duration, Instant};
 
 use recording::Flow;
-use recording::silence::Event;
+use recording::vad::Event;
 
 /// Presses released sooner than this are taps; longer ones are holds.
 pub const TAP_MAX: Duration = Duration::from_millis(300);

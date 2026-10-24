@@ -5,8 +5,7 @@
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
-use recording::silence::Event;
-use recording::vad::{self, CHUNK_SAMPLES, Detector, Params, State, Vad};
+use recording::vad::{self, CHUNK_SAMPLES, Detector, Event, Params, State, Vad};
 
 /// Probability above which a chunk counts as speech in these tests.
 const SPEECH: f32 = 0.5;

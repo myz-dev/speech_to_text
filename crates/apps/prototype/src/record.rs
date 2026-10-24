@@ -8,8 +8,8 @@ use std::time::Instant;
 
 use anyhow::bail;
 use recording::Flow;
-use recording::silence::{self, Event, Frame, Params};
-use recording::vad::{self, Vad};
+use recording::silence::{self, Params};
+use recording::vad::{self, Event, Vad};
 
 use crate::{
     Dictation, Lang, SttArgs, check_recording, load_model, load_vad, record_dictation, timed,
@@ -64,7 +64,7 @@ fn record_until_silence(vad: &mut Vad, save: Option<&Path>) -> anyhow::Result<Di
     eprint!("Press Enter to start recording.");
     wait_for_enter()?;
     eprintln!("Recording until you stop speaking, or press Enter.");
-    eprintln!("  time   level  floor  start");
+    eprintln!("  time   level");
     let enter = enter_presses();
     let mut frame_count = 0_u32;
     let mut silent_start_frames = 0_u32;
@@ -72,13 +72,13 @@ fn record_until_silence(vad: &mut Vad, save: Option<&Path>) -> anyhow::Result<Di
 
     let vad_params = vad::Params::default();
     let recording =
-        recording::record_streaming(&Params::default(), vad, &vad_params, |frames, events| {
-            for frame in frames {
+        recording::record_streaming(&Params::default(), vad, &vad_params, |levels, events| {
+            for &level_db in levels {
                 frame_count += 1;
-                if frame_count <= silence::frames(1_000) && frame.level_db <= silence::MIN_DB {
+                if frame_count <= silence::frames(1_000) && level_db <= silence::MIN_DB {
                     silent_start_frames += 1;
                 }
-                print_frame(frame_count, frame);
+                print_frame(frame_count, level_db);
             }
             for &event in events {
                 eprintln!("  <- {event:?}");
@@ -128,13 +128,10 @@ fn enter_presses() -> Receiver<()> {
     receiver
 }
 
-/// Prints one frame: its end time, level, noise floor and start threshold in dBFS, and a
-/// level bar from -80 dBFS (2 dB per character).
-fn print_frame(index: u32, frame: &Frame) {
+/// Prints one frame: its end time, its level in dBFS, and a level bar from -80 dBFS
+/// (2 dB per character).
+fn print_frame(index: u32, level_db: f32) {
     let secs = f64::from(index * silence::FRAME_MS) / 1_000.0;
-    let bar = "#".repeat(((frame.level_db + 80.0) / 2.0).max(0.0) as usize);
-    eprintln!(
-        "{secs:6.2} {:7.1} {:6.1} {:6.1}  {bar}",
-        frame.level_db, frame.floor_db, frame.start_db
-    );
+    let bar = "#".repeat(((level_db + 80.0) / 2.0).max(0.0) as usize);
+    eprintln!("{secs:6.2} {level_db:7.1}  {bar}");
 }
