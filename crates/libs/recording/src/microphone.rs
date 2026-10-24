@@ -154,6 +154,8 @@ pub fn record_streaming(
         on_frames,
     );
     drop(input.stream);
+    // A failed speech detector ends the recording with its error, even if the device
+    // also failed: the stream errors are only looked at in `finish`.
     let mut streamed = streamed.map_err(RecordError::Vad)?;
 
     // Audio captured between the stop and the drop belongs to the recording too.
@@ -321,7 +323,8 @@ fn finish(
     // Silero VAD decides whether there is speech: by loudness alone, coughs and typing
     // are speech. `speech_span` only trims, by loudness. Speech too quiet for it
     // (below `Params::min_start_db`) keeps the whole recording: audio is kept, not
-    // words lost.
+    // words lost. Known limit: quiet speech next to a louder cough or typing is cut,
+    // because the span then covers only the loud noise.
     let to_sample = |frame| frame_start_at_16k(frame, sample_rate).min(samples.len());
     let speech = heard_speech.then(|| match silence::speech_span(&levels, params) {
         Some(frames) => to_sample(frames.start)..to_sample(frames.end),
