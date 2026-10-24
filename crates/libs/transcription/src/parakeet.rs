@@ -6,11 +6,8 @@
 
 use std::io;
 use std::path::{Path, PathBuf};
-use std::sync::{Mutex, PoisonError};
 
-use ort::environment::Environment;
 use ort::session::Session;
-use ort::session::builder::AutoDevicePolicy;
 use ort::value::TensorRef;
 
 /// Mel frequency bands per feature frame.
@@ -50,23 +47,6 @@ const SKIP_CHOICES: usize = 5;
 /// predicting "stay on this frame"; this bounds that loop. onnx-asr reads it from
 /// `config.json` with the same default; the shipped `config.json` does not set it.
 const MAX_TOKENS_PER_FRAME: usize = 10;
-
-/// The process's ONNX Runtime environment, shared by all sessions. ort allows only one
-/// environment per process, and never a second one, even after the first is dropped.
-static ENVIRONMENT: Mutex<Option<Environment>> = Mutex::new(None);
-
-/// Returns the shared environment, creating it on first use.
-fn environment() -> Result<Environment, ort::Error> {
-    // The lock only guards an `Option` that is written in one step, so a panic while
-    // holding it cannot leave it inconsistent; ignore poisoning.
-    let mut shared = ENVIRONMENT.lock().unwrap_or_else(PoisonError::into_inner);
-    if let Some(environment) = shared.as_ref() {
-        return Ok(environment.clone());
-    }
-    let environment = ort::init().build()?;
-    *shared = Some(environment.clone());
-    Ok(environment)
-}
 
 #[derive(Debug, thiserror::Error)]
 pub enum LoadModelError {
@@ -406,17 +386,8 @@ fn read_vocabulary(path: &Path) -> Result<Vec<String>, LoadModelError> {
 }
 
 /// Loads one ONNX graph into a CPU session of the shared environment.
-///
-/// ort's default device policy hands parts of the encoder to CoreML on macOS, even
-/// without its `coreml` feature. That makes session creation ~4× slower, encoding ~1.8×
-/// slower, and changes the output; `PreferCPU` keeps the whole graph on the CPU.
 fn session(path: &Path) -> Result<Session, LoadModelError> {
-    let build = || -> Result<Session, ort::Error> {
-        Session::builder(&environment()?)?
-            .with_auto_device(AutoDevicePolicy::PreferCPU)?
-            .commit_from_file(path)
-    };
-    build().map_err(|source| LoadModelError::Graph {
+    onnx::session(path).map_err(|source| LoadModelError::Graph {
         path: path.to_path_buf(),
         source,
     })

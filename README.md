@@ -135,7 +135,7 @@ under rules in [AGENTS.md](AGENTS.md) and checked by a human:
 | `crates/apps/dictate` | The Tauri app |
 | `crates/apps/dictate/ui` | The minimal frontend |
 | `crates/apps/prototype` | The `stt` CLI prototype (excluded from root commands, use `-p prototype`) |
-| `crates/libs/` | Reusable libraries (recording, transcription, cleanup, eval) |
+| `crates/libs/` | Reusable libraries (recording, transcription, cleanup, eval, onnx) |
 | `fixtures/` | Test recordings (local only) and reference transcripts |
 | `models/` | Model weights (local only, see [PLAN.md](PLAN.md#model-files-models-gitignored)) |
 
