@@ -31,8 +31,10 @@ settled on:
   silence and noise, writes punctuated text, and needs no language hint
   ([FINDINGS M2](FINDINGS.md#m2-parakeet-end-to-end-vs-whisper)).
   Whisper remains in the `transcription` crate and the prototype.
-- **An energy-based speech detector** that stops a recording when speech ends and trims
-  silence before transcribing. It is simple, but tuned on measured levels.
+- **Silero VAD** (a small speech classifier, MIT) to decide whether and when there is
+  speech: unlike a loudness threshold, it does not take coughs or typing for speech
+  ([FINDINGS](FINDINGS.md#app-silero-vad-against-coughs-and-typing)). Loudness is
+  still used to trim the silence before and after the speech.
 - **`ministral-3:8b`** via Ollama for the optional cleanup.
 
 ## Processing pipeline
@@ -45,7 +47,8 @@ for 10 s.
 hotkey (main thread) ──Key──▶ worker thread (owns the model)
                                 │ record_streaming(on_frames)
                                 │   ├─ downmix each buffer, measure 30 ms frames → level (dBFS)
-                                │   ├─ silence::step → SpeechEnded ⇒ stop (after a tap)
+                                │   ├─ vad::Live: resample → 16 kHz, Silero per 32 ms chunk
+                                │   │    → vad::decide → SpeechEnded ⇒ stop (after a tap)
                                 │   └─ keys ⇒ stop (release / second tap)
                                 │ no speech heard ⇒ done, nothing pasted
                                 │ resample once → 16 kHz
@@ -61,23 +64,25 @@ UI (vanilla TS): status, last raw/cleaned text, settings and setup instructions
 The audio callback sends each buffer (about 10 ms) through a channel to the worker,
 which waits for one at most 20 ms. Each buffer is downmixed to mono and appended, and
 every complete 30 ms frame is measured as its RMS level in dBFS; a frame may span two
-buffers. The audio is resampled once the recording ends to the 16 kHz
+buffers. For the speech detector, each buffer is also resampled to 16 kHz as it
+arrives. Once the recording ends, the whole recording is resampled again to the 16 kHz
 Parakeet expects (about 20 ms of work).
 
-**Live detection:** The detector tracks the background noise level (the noise floor)
-while recording. Speech starts when the level stays 12 dB above the floor, and at
-least at -55 dBFS, for 90 ms; shorter bursts are clicks. The -55 dBFS minimum keeps
-breathing in a very quiet room from counting as speech. The floor is never taken to be
-louder than -40 dBFS, so loud background noise counts as speech: this guarantees that we 
-do not throw away audio in loud environments (we rather pass more to the transcription model 
-than loose words). Speech ends after 1.2 s below a threshold 6 dB lower than the start
-threshold, so short pauses do not end a recording. Measured on the built-in
-microphone: room -71 to -65 dBFS, speech peaks -36 to -32 dBFS, typing up to -45 dBFS
-([FINDINGS](FINDINGS.md#app-silence-detection-on-the-built-in-microphone)).
+**Live detection:** Silero VAD scores every 32 ms chunk of 16 kHz audio with the
+probability that it holds speech (0.09 ms per chunk on the CPU). Speech starts when 4
+chunks in a row (128 ms) score above 0.9, and ends after 1.2 s below 0.5, so short
+pauses do not end a recording. A probability of 0.5 is not enough to start: a cough
+scored above it for 320 ms, longer than a spoken "Ja". Above 0.9, coughs last at most 2
+chunks and a single word at least 7; typing never got above 0.08
+([FINDINGS](FINDINGS.md#app-silero-vad-against-coughs-and-typing)).
 
 **Trimming:** The live detector decides whether there was speech at all. If it heard
-none, nothing is transcribed. If it did, the same measured levels are scanned again
-with hindsight to cut the silence before and after the speech, keeping a short margin.
+none, nothing is transcribed. If it did, the measured levels are scanned with
+hindsight: speech is 12 dB above the quietest part of the recording, and at least at
+-55 dBFS, and the silence before and after it is cut, keeping a short margin. Speech
+too quiet for that keeps the whole recording. Measured on the built-in microphone:
+room -71 to -65 dBFS, speech peaks -36 to -32 dBFS
+([FINDINGS](FINDINGS.md#app-silence-detection-on-the-built-in-microphone)).
 
 **Speech to text:** Parakeet runs with ONNX Runtime on the CPU. The decoding follows
 [onnx-asr](https://github.com/istupakov/onnx-asr) by Ilya Stupakov (MIT), whose ONNX
@@ -93,8 +98,9 @@ fails, the raw transcript displayed to the user as a fallback.
 
 ## Known limits
 
-- A cough counts as speech: an energy detector cannot tell them apart.
-- Loud typing while speaking keeps a recording open until the typing stops.
+- Clearing the throat counts as speech: it is voiced, and Silero VAD scores it like a
+  short word.
+- A pause of more than 1.2 s ends a tapped recording.
 - With slow microphones (some Bluetooth headsets), a tap can count as a hold.
 - Each new build needs the Accessibility permission again (ad-hoc signing).
 
@@ -164,8 +170,6 @@ cargo run -p prototype -- --help            # the stt prototype CLI
 ## Roadmap
 
 The most obvious ways forward for this project would be:
-- a speech classifier (VAD model) instead of the energy detector, so coughs and typing
-  no longer count as speech
 - detecting the spoken language, so the cleanup no longer needs the language setting
 - refining the cleanup: tuning the prompt has shown big improvements already; rule-based
   steps could improve it further and in some cases skip the LLM call

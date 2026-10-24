@@ -290,3 +290,51 @@ fn a_missing_model_names_its_path() {
         "cannot load silero vad model models/missing.onnx"
     );
 }
+
+/// The events of [`vad::Live`] fed `audio`, converted to `sample_rate`, in pieces of
+/// 10 ms, like microphone buffers.
+fn live_events(vad: &mut Vad, audio: &[f32], sample_rate: u32) -> Vec<Event> {
+    let audio = recording::resample(audio.to_vec(), recording::SAMPLE_RATE, sample_rate).unwrap();
+    let mut live = vad::Live::new(vad, Params::default(), sample_rate).unwrap();
+    let mut events = Vec::new();
+    for piece in audio.chunks(sample_rate as usize / 100) {
+        events.extend(live.push(piece).unwrap());
+    }
+    events
+}
+
+#[test]
+fn live_reports_the_events_of_the_whole_recording_at_any_rate() {
+    let Some(mut vad) = open_vad() else {
+        return;
+    };
+    for name in ["speech-cough.wav", "cough.wav", "word-ja.wav", "typing.wav"] {
+        let Some(audio) = noise_fixture(name) else {
+            continue;
+        };
+        let expected = events(&mut vad, &audio);
+        for sample_rate in [16_000, 44_100, 48_000] {
+            assert_eq!(
+                live_events(&mut vad, &audio, sample_rate),
+                expected,
+                "{name} at {sample_rate} Hz"
+            );
+        }
+    }
+}
+
+#[test]
+fn live_keeps_samples_that_do_not_complete_a_chunk() {
+    let Some(mut vad) = open_vad() else {
+        return;
+    };
+    let speech = speak("Anna", "Heute Abend gehen wir zusammen ins Kino.");
+    let mut live = vad::Live::new(&mut vad, Params::default(), recording::SAMPLE_RATE).unwrap();
+
+    // One sample at a time: every chunk is completed by some call.
+    for sample in &speech {
+        live.push(std::slice::from_ref(sample)).unwrap();
+    }
+
+    assert!(live.heard_speech());
+}

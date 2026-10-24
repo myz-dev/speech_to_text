@@ -9,6 +9,7 @@ use clap::{Parser, Subcommand, ValueEnum};
 use cleanup::Language;
 use recording::Recording;
 use recording::silence::Params;
+use recording::vad::{self, Vad};
 use transcription::{Device, Model, Transcript};
 
 pub mod bench;
@@ -124,13 +125,13 @@ struct Dictation {
 
 /// Records from the default microphone between two presses of Enter and saves the
 /// recording to `save` if given. Prompts and warnings go to stderr.
-fn record_dictation(save: Option<&Path>) -> anyhow::Result<Dictation> {
+fn record_dictation(vad: &mut Vad, save: Option<&Path>) -> anyhow::Result<Dictation> {
     eprint!("Press Enter to start recording.");
     wait_for_enter()?;
     eprint!("Recording, press Enter to stop.");
     let mut enter = Ok(());
     let mut stopped_at = Instant::now();
-    let recording = recording::record(&Params::default(), || {
+    let recording = recording::record(&Params::default(), vad, &vad::Params::default(), || {
         enter = wait_for_enter();
         stopped_at = Instant::now();
     })?;
@@ -176,6 +177,11 @@ fn wait_for_enter() -> anyhow::Result<()> {
 fn load_model(stt: &SttArgs) -> anyhow::Result<Model> {
     let device = if stt.cpu { Device::Cpu } else { Device::Gpu };
     Ok(Model::load(stt.engine.into(), &stt.models, device)?)
+}
+
+/// Loads Silero VAD from the models directory, for the speech detection of a recording.
+fn load_vad(stt: &SttArgs) -> anyhow::Result<Vad> {
+    Ok(Vad::open(&stt.models.join(vad::MODEL_FILE))?)
 }
 
 /// The summary line after a transcript: language (if the engine reports one), audio

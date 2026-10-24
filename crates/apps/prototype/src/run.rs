@@ -6,8 +6,8 @@ use std::path::PathBuf;
 use anyhow::bail;
 
 use crate::{
-    DEFAULT_CLEANUP_MODEL, Engine, Lang, SttArgs, duration_secs, load_model, record_dictation,
-    timed,
+    DEFAULT_CLEANUP_MODEL, Engine, Lang, SttArgs, duration_secs, load_model, load_vad,
+    record_dictation, timed,
 };
 
 #[derive(Debug, clap::Args)]
@@ -34,13 +34,14 @@ pub(crate) fn execute(args: &Args, out: &mut dyn Write) -> anyhow::Result<()> {
 
     // Loading first keeps it out of the time from stop to text.
     let (mut model, stt_load_secs) = timed(|| load_model(stt))?;
+    let mut vad = load_vad(stt)?;
     let ((), llm_load_secs) = timed(|| Ok(cleanup::load(&args.model)?))?;
     eprintln!(
         "Loaded {:?} in {stt_load_secs:.2} s and {} in {llm_load_secs:.2} s.",
         stt.engine, args.model
     );
 
-    let dictation = record_dictation(args.save.as_deref())?;
+    let dictation = record_dictation(&mut vad, args.save.as_deref())?;
     let (transcript, transcribe_secs) =
         timed(|| Ok(model.transcribe(&dictation.samples, stt.language.map(Lang::code))?))?;
     // An LLM given an empty transcript tends to invent text.

@@ -1,15 +1,13 @@
-//! Energy-based speech detection on 30 ms frames.
-//!
-//! Two uses with the same threshold:
-//! - `step` runs live while recording, one frame at a time, and reports when speech
-//!   starts and ends ([`Frame`], from [`crate::record_streaming`]). It only knows the
-//!   past, so it estimates the noise floor as it goes. Whether it heard speech at all
-//!   decides whether a recording holds speech: its floor follows steady noise such as
-//!   typing.
+//! Energy-based speech detection on 30 ms frames. Whether a recording holds speech, and
+//! when it starts and ends, is decided by Silero VAD ([`crate::vad`]): by loudness,
+//! coughs and typing are speech. Loudness is used for two things:
+//! - `step` runs live while recording, one frame at a time, and estimates the noise
+//!   floor as it goes, since it only knows the past. Its floor and threshold are
+//!   reported per [`Frame`] (from [`crate::record_streaming`]); its speech events are
+//!   not used.
 //! - `speech_span` runs on the levels of a finished recording and finds the frames from
 //!   the first to the last speech, for trimming ([`crate::Recording::speech`]). It sees
-//!   the whole recording, so the quietest window (below) is its noise floor; the live
-//!   floor is never lower, so `speech_span` finds speech wherever `step` started it.
+//!   the whole recording, so the quietest window (below) is its noise floor.
 //!
 //! Both take the noise floor from windows of [`FLOOR_FRAMES`] frames: the loudest frame
 //! of a window is its level, and windows holding digital silence ([`MIN_DB`]) are
@@ -150,13 +148,6 @@ enum Phase {
     Speech { quiet_run: u32 },
 }
 
-impl Detector {
-    /// Whether [`Event::SpeechStarted`] has been reported.
-    pub(crate) fn heard_speech(&self) -> bool {
-        self.heard_speech
-    }
-}
-
 impl Default for Detector {
     fn default() -> Self {
         Self {
@@ -237,20 +228,18 @@ pub struct Frame {
     pub start_db: f32,
     /// Noise floor after the frame; +inf until the first window without digital silence.
     pub floor_db: f32,
-    /// What the detector reported at this frame.
-    pub event: Option<Event>,
 }
 
-/// Measures one frame of mono samples and feeds its level to the detector.
+/// Measures one frame of mono samples and feeds its level to the detector, for its noise
+/// floor. Its events are not used: Silero VAD decides about speech ([`crate::vad`]).
 pub(crate) fn analyse(detector: Detector, samples: &[f32], params: &Params) -> (Detector, Frame) {
     let level_db = level_db(samples);
     let start_db = start_threshold_db(detector.floor_db, params);
-    let (detector, event) = step(detector, level_db, params);
+    let (detector, _) = step(detector, level_db, params);
     let frame = Frame {
         level_db,
         start_db,
         floor_db: detector.floor_db,
-        event,
     };
     (detector, frame)
 }
@@ -405,7 +394,7 @@ mod tests {
             let event;
             (detector, event) = step(detector, level_db(frame), &params);
             if let Some(event) = event {
-                heard.push((event, detector.heard_speech()));
+                heard.push((event, detector.heard_speech));
             }
         }
         assert_eq!(
@@ -664,7 +653,7 @@ mod tests {
             for &level in &levels {
                 detector = step(detector, level, &params).0;
             }
-            assert!(detector.heard_speech(), "{levels:?}");
+            assert!(detector.heard_speech, "{levels:?}");
             let span = speech_span(&levels, &params).expect("a speech span");
             assert_eq!(span.start, speech_start.saturating_sub(pad), "{levels:?}");
         }

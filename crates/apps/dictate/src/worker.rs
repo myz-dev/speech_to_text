@@ -10,6 +10,7 @@ use std::time::Instant;
 use anyhow::Context;
 use recording::Flow;
 use recording::silence::Params;
+use recording::vad::{self, Vad};
 use tauri::{AppHandle, Manager};
 use transcription::{Device, Engine, Model};
 
@@ -42,10 +43,10 @@ pub fn spawn(app: AppHandle, startup_warning: Option<anyhow::Error>) -> Sender<K
 
 fn run(app: &AppHandle, keys: &Receiver<Key>, startup_warning: Option<anyhow::Error>) {
     status::publish(app, Status::Loading);
-    let mut model = match load_model(app) {
-        Ok(model) => model,
+    let (mut vad, mut model) = match load_models(app) {
+        Ok(models) => models,
         Err(error) => {
-            // Without a model there is nothing to do; keep the error visible.
+            // Without the models there is nothing to do; keep the error visible.
             status::publish(app, Status::error(&error));
             return;
         }
@@ -63,7 +64,7 @@ fn run(app: &AppHandle, keys: &Receiver<Key>, startup_warning: Option<anyhow::Er
         let pressed = Mode::Pressed { at: Instant::now() };
         // Copied per dictation, so a change applies from the next one.
         let settings = settings::current(app);
-        match dictate(app, &mut model, keys, pressed, settings) {
+        match dictate(app, &mut vad, &mut model, keys, pressed, settings) {
             Ok(after) => status::publish(app, after),
             Err(error) => status::publish(app, Status::error(&error)),
         }
@@ -72,19 +73,24 @@ fn run(app: &AppHandle, keys: &Receiver<Key>, startup_warning: Option<anyhow::Er
     }
 }
 
-/// Loads [`ENGINE`]'s model from the app's models directory.
-fn load_model(app: &AppHandle) -> anyhow::Result<Model> {
+/// Loads Silero VAD and [`ENGINE`]'s model from the app's models directory. The VAD
+/// comes first: it loads in milliseconds, so a missing file shows up at once.
+fn load_models(app: &AppHandle) -> anyhow::Result<(Vad, Model)> {
     let models = app
         .path()
         .app_data_dir()
         .context("cannot find the app data directory")?
         .join("models");
-    Model::load(ENGINE, &models, Device::Gpu).with_context(|| missing_model_hint(&models))
+    let vad = Vad::open(&models.join(vad::MODEL_FILE))
+        .with_context(|| missing_model_hint("Silero VAD", &models))?;
+    let model = Model::load(ENGINE, &models, Device::Gpu)
+        .with_context(|| missing_model_hint(&format!("{ENGINE:?}"), &models))?;
+    Ok((vad, model))
 }
 
-fn missing_model_hint(models: &Path) -> String {
+fn missing_model_hint(name: &str, models: &Path) -> String {
     format!(
-        "no usable {ENGINE:?} model in {}; see SETUP.md",
+        "no usable {name} model in {}; see SETUP.md",
         models.display()
     )
 }
@@ -96,6 +102,7 @@ fn missing_model_hint(models: &Path) -> String {
 /// A recording without speech ends here. Returns the status to show afterwards.
 fn dictate(
     app: &AppHandle,
+    vad: &mut Vad,
     model: &mut Model,
     keys: &Receiver<Key>,
     mut mode: Mode,
@@ -108,23 +115,25 @@ fn dictate(
     }
     status::publish(app, Status::Recording);
     let mut stopped_at = Instant::now();
-    let recording = recording::record_streaming(&Params::default(), |frames| {
-        // Runs after every microphone buffer (~10 ms), or every 20 ms without one, but
-        // only once the microphone has started. Keys are timed here, when read: a
-        // release during a slow microphone start (hundreds of milliseconds for some
-        // Bluetooth headsets) is timed late and turns a tap into a hold.
-        let keys = keys.try_iter().map(Input::Key);
-        let events = frames.iter().filter_map(|frame| frame.event);
-        for input in keys.chain(events.map(Input::Speech)) {
-            let flow;
-            (mode, flow) = gesture::on_input(mode, input, Instant::now());
-            if flow == Flow::Stop {
-                stopped_at = Instant::now();
-                return Flow::Stop;
+    let vad_params = vad::Params::default();
+    let recording =
+        recording::record_streaming(&Params::default(), vad, &vad_params, |_, events| {
+            // Runs after every microphone buffer (~10 ms), or every 20 ms without one, but
+            // only once the microphone has started. Keys are timed here, when read: a
+            // release during a slow microphone start (hundreds of milliseconds for some
+            // Bluetooth headsets) is timed late and turns a tap into a hold.
+            let keys = keys.try_iter().map(Input::Key);
+            let events = events.iter().copied().map(Input::Speech);
+            for input in keys.chain(events) {
+                let flow;
+                (mode, flow) = gesture::on_input(mode, input, Instant::now());
+                if flow == Flow::Stop {
+                    stopped_at = Instant::now();
+                    return Flow::Stop;
+                }
             }
-        }
-        Flow::Continue
-    })?;
+            Flow::Continue
+        })?;
 
     let Some(speech) = recording.speech else {
         return Ok(Status::Idle);

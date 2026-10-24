@@ -16,9 +16,15 @@ use std::path::{Path, PathBuf};
 
 use ort::session::Session;
 use ort::value::TensorRef;
+use rubato::audioadapter_buffers::direct::InterleavedSlice;
+use rubato::{Fft, Resampler};
 
 use crate::SAMPLE_RATE;
+use crate::convert::{ResampleError, resampler};
 use crate::silence::Event;
+
+/// The model file inside a models directory, as PLAN.md and SETUP.md download it.
+pub const MODEL_FILE: &str = "silero-vad/silero_vad.onnx";
 
 /// Samples judged per step: 32 ms at 16 kHz, the chunk length the model is trained on.
 pub const CHUNK_SAMPLES: usize = 512;
@@ -60,6 +66,8 @@ pub enum VadError {
         len: usize,
         expected: usize,
     },
+    #[error("cannot convert the audio to {SAMPLE_RATE} Hz for the speech detector")]
+    Resample(#[source] ResampleError),
 }
 
 /// The Silero VAD graph loaded into an ONNX Runtime session, running on the CPU.
@@ -275,6 +283,91 @@ pub fn decide(detector: Detector, probability: f32, params: &Params) -> (Detecto
         heard_speech,
     };
     (next, event)
+}
+
+/// The speech decision on audio that arrives in pieces at any sample rate, e.g. from a
+/// microphone: converts it to 16 kHz, cuts it into chunks, scores them with the model
+/// and feeds the probabilities to [`decide`].
+///
+/// The conversion delays the audio by a few milliseconds (the resampler's filter), so
+/// events come that much later than in [`Vad::probabilities`] on 16 kHz audio.
+pub struct Live<'a> {
+    vad: &'a mut Vad,
+    params: Params,
+    /// `None` when the audio is at 16 kHz already.
+    resampler: Option<Fft<f32>>,
+    /// Audio at the input rate not yet converted: less than one resampler chunk.
+    unconverted: Vec<f32>,
+    /// 16 kHz audio not yet scored: less than one chunk.
+    unscored: Vec<f32>,
+    state: State,
+    detector: Detector,
+}
+
+impl<'a> Live<'a> {
+    /// A decision with `params` on mono audio at `sample_rate`, from the start of a
+    /// recording.
+    pub fn new(vad: &'a mut Vad, params: Params, sample_rate: u32) -> Result<Self, VadError> {
+        let resampler = if sample_rate == SAMPLE_RATE {
+            None
+        } else {
+            Some(resampler(sample_rate, SAMPLE_RATE).map_err(VadError::Resample)?)
+        };
+        Ok(Self {
+            vad,
+            params,
+            resampler,
+            unconverted: Vec::new(),
+            unscored: Vec::new(),
+            state: State::default(),
+            detector: Detector::default(),
+        })
+    }
+
+    /// Takes the next mono samples of the recording and returns the events of the chunks
+    /// they completed. Samples that do not complete a chunk are kept for the next call.
+    pub fn push(&mut self, samples: &[f32]) -> Result<Vec<Event>, VadError> {
+        match &mut self.resampler {
+            None => self.unscored.extend_from_slice(samples),
+            Some(resampler) => {
+                self.unconverted.extend_from_slice(samples);
+                let mut converted = 0;
+                while self.unconverted.len() - converted >= resampler.input_frames_next() {
+                    let len = resampler.input_frames_next();
+                    let piece = &self.unconverted[converted..converted + len];
+                    // Invariant: one channel of `len` frames matches the slice length.
+                    let input = InterleavedSlice::new(piece, 1, len)
+                        .expect("mono slice length equals its frame count");
+                    let output = resampler
+                        .process(&input, None)
+                        .map_err(|source| VadError::Resample(ResampleError::Process(source)))?;
+                    self.unscored.extend(output.take_data());
+                    converted += len;
+                }
+                self.unconverted.drain(..converted);
+            }
+        }
+
+        let mut events = Vec::new();
+        let mut scored = 0;
+        for chunk in self.unscored.chunks_exact(CHUNK_SAMPLES) {
+            // `chunks_exact` only yields chunks of exactly CHUNK_SAMPLES.
+            let chunk = chunk.try_into().expect("chunk has CHUNK_SAMPLES samples");
+            let probability;
+            (self.state, probability) = self.vad.step(&self.state, chunk)?;
+            let event;
+            (self.detector, event) = decide(self.detector, probability, &self.params);
+            events.extend(event);
+            scored += CHUNK_SAMPLES;
+        }
+        self.unscored.drain(..scored);
+        Ok(events)
+    }
+
+    /// Whether [`Event::SpeechStarted`] has been reported.
+    pub fn heard_speech(&self) -> bool {
+        self.detector.heard_speech()
+    }
 }
 
 #[cfg(test)]

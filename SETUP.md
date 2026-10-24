@@ -42,27 +42,31 @@ macOS remembers this; later launches open normally. Dictate opens its window and
 an icon in the menu bar. Closing the window only hides it: Dictate keeps running in the
 menu bar. Opening Dictate again (from Applications, Spotlight or a launcher) or
 icon → **Show Dictate** brings the window back; icon → **Quit Dictate** ends it.
-Until the model is downloaded, the window shows "no usable Parakeet model"; that is
+Until the models are downloaded, the window shows "no usable … model"; that is
 expected.
 
-## 3. Download the speech model
+## 3. Download the speech models
 
-Dictate uses NVIDIA's Parakeet model (about 640 MB). Open **Terminal**
-(Applications → Utilities), paste this block and press Return:
+Dictate uses NVIDIA's Parakeet model to transcribe (about 640 MB) and Silero VAD to
+detect speech (2 MB). Open **Terminal** (Applications → Utilities), paste this block
+and press Return:
 
 ```bash
-dir="$HOME/Library/Application Support/local.dictate/models/parakeet-tdt-0.6b-v3"
+models="$HOME/Library/Application Support/local.dictate/models"
 base="https://huggingface.co/istupakov/parakeet-tdt-0.6b-v3-onnx/resolve/main"
 for f in nemo128.onnx encoder-model.int8.onnx decoder_joint-model.int8.onnx vocab.txt; do
-  curl -L --fail --create-dirs -o "$dir/$f" "$base/$f" || echo "FAILED: $f"
+  curl -L --fail --create-dirs -o "$models/parakeet-tdt-0.6b-v3/$f" "$base/$f" || echo "FAILED: $f"
 done
+curl -L --fail --create-dirs -o "$models/silero-vad/silero_vad.onnx" \
+  "https://github.com/snakers4/silero-vad/raw/v6.2/src/silero_vad/data/silero_vad.onnx" \
+  || echo "FAILED: silero_vad.onnx"
 ```
 
-curl shows its progress per file. When the prompt returns without "FAILED", the model
-is in place. If a file failed, run the block again.
+curl shows its progress per file. When the prompt returns without "FAILED", the models
+are in place. If a file failed, run the block again.
 
 Then quit Dictate (menu bar icon → **Quit Dictate**) and open it again, so it loads the
-model.
+models.
 
 ## 4. First dictation
 
@@ -119,7 +123,7 @@ Settings are not saved: after restarting Dictate they are back to their defaults
 
 | What you see | What to do |
 |---|---|
-| "no usable Parakeet model in …" | Step 3 did not finish; run the download again, then restart Dictate. |
+| "no usable Parakeet model in …" or "no usable Silero VAD model in …" | Step 3 did not finish; run the download again, then restart Dictate. |
 | "… delivered only digital silence; check that this app may use the microphone" | System Settings → Privacy & Security → **Microphone**: switch Dictate on. |
 | "Dictate may not paste yet" | Step 5. The text is on the clipboard; paste it with ⌘V meanwhile. |
 | Nothing happens on ⌃⌥Space | Another app may use the same hotkey (e.g. a launcher). Quit it and try again. |
